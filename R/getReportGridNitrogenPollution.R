@@ -25,7 +25,13 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     # Helper functions
 
     .formatReport <- function(x, name) {
-        getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        # Handle both 2-subdim (x.y) and 3-subdim (x.y.iso) spatial structures
+        currentSets <- getSets(x)
+        if ("d1.3" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        } else if ("d1.2" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2")] <- c("x", "y")
+        }
         getSets(x, fulldim = FALSE)[3] <- "variable"
         getNames(x) <- name
         return(x)
@@ -159,8 +165,11 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     # Exceedance of critical nitrogen surplus (based on Schulte-Uebbing et al. 2022)
 
     surplusExceedances <- NULL
+    # Look for critical surplus file in output directory, or in gdx directory if reportOutputDir is NULL
+    gdxDir <- dirname(gdx)
+    searchDir <- if (!is.null(reportOutputDir)) reportOutputDir else gdxDir
     criticalNitrogenSurplusPath <- file.path(
-        "criticalNitrogenSurplus_0.5.mz"
+        searchDir, "criticalNitrogenSurplus_0.5.mz"
     )
 
     if (file.exists(criticalNitrogenSurplusPath)) {

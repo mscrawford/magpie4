@@ -38,10 +38,10 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     }
 
     .saveReport <- function(x, file, comment = NULL) {
-        if (!is.null(reportOutputDir) && !is.null(scenario)) {
+        if (!is.null(reportOutputDir)) {
             write.magpie(
                 x,
-                file_name = file.path(reportOutputDir, paste0(scenario, "-", file, ".nc")),
+                file_name = file.path(reportOutputDir, paste0(file, ".nc")),
                 comment = comment
             )
         }
@@ -178,6 +178,14 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
             criticalNitrogenSurplus,
             dim = c(2, 3)
         )
+
+        # Expand critical nitrogen surplus across all years of the nutrient surplus
+        # (criticalNitrogenSurplus has y2010 only, but surplus spans multiple years)
+        yearsNeeded <- getYears(nutrientSurplus_agriAWMS_perHa)
+        if (length(getYears(criticalNitrogenSurplus)) == 1 && length(yearsNeeded) > 1) {
+            criticalNitrogenSurplus <- criticalNitrogenSurplus[, rep(1, length(yearsNeeded)), ]
+            getYears(criticalNitrogenSurplus) <- yearsNeeded
+        }
 
         # Calculate exceedance of the critical nitrogen surplus
         # Schulte-Uebbing et al. 2022 already subtracts non-agricultural land surplus

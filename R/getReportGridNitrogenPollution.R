@@ -179,12 +179,6 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
             dim = c(2, 3)
         )
 
-        # Expand critical nitrogen surplus across all years of the nutrient surplus
-        # (criticalNitrogenSurplus has y2010 only, but surplus has multiple years)
-        yearsNeeded <- getYears(nutrientSurplus_agriAWMS_perHa)
-        criticalNitrogenSurplus <- criticalNitrogenSurplus[, rep(1, length(yearsNeeded)), ]
-        getYears(criticalNitrogenSurplus) <- yearsNeeded
-
         # Calculate exceedance of the critical nitrogen surplus
         # Schulte-Uebbing et al. 2022 already subtracts non-agricultural land surplus
         surplusExceedances <- -1 * (

@@ -125,6 +125,19 @@
 #'
 reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   # -----------------------------------------------------------------------------------------------------------------
+  # Helper: expand a magpie object to match target years, filling missing years with 0
+  .harmonizeYears <- function(x, targetYears) {
+    if (is.null(x)) return(x)
+    missingYears <- setdiff(targetYears, getYears(x))
+    if (length(missingYears) > 0) {
+      fill <- new.magpie(getCells(x), missingYears, getNames(x), fill = 0,
+                         sets = getSets(x))
+      x <- mbind(x, fill)
+    }
+    return(x[, targetYears, ])
+  }
+
+  # -----------------------------------------------------------------------------------------------------------------
   # All transformations (lowpass filter, cumulative) will be applied to this single dataset
   co2_raw <- emisCO2(gdx, level = level, unit = "gas", sum_land = FALSE, sum_cpool = FALSE)
 
@@ -292,6 +305,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     if (is.null(peatland)) {
       peatland <- new.magpie(getCells(co2), getYears(co2), "peatland", fill = 0)
     } else {
+      peatland <- .harmonizeYears(peatland, getYears(co2))
       peatland <- setNames(dimSums(peatland[, , c("co2", "doc")], dim = 3), "peatland")
     }
 
@@ -909,6 +923,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
       if (is.null(peatlandN2O)) {
         nEmissions <- add_columns(nEmissions, addnm = "peatland", dim = "emis_source", fill = 0)
       } else {
+        peatlandN2O <- .harmonizeYears(peatlandN2O, getYears(nEmissions))
         nEmissions <- add_columns(nEmissions, addnm = "peatland", dim = "emis_source", fill = 0)
         nEmissions[, , "peatland"] <- collapseNames(peatlandN2O[, , "n2o"])
       }
@@ -976,6 +991,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   if (is.null(peatlandCH4)) {
     ch4 <- add_columns(ch4, addnm = "peatland", dim = "emis_source", fill = 0)
   } else {
+    peatlandCH4 <- .harmonizeYears(peatlandCH4, getYears(ch4))
     peatlandCH4 <- setNames(collapseNames(peatlandCH4[, , "ch4"]), "peatland")
     ch4 <- mbind(ch4, peatlandCH4)
   }

@@ -59,6 +59,12 @@
 #' Emissions\|CO2\|Land\|++\|Above Ground Carbon | Mt CO2/yr | CO2 flux from above ground carbon pools
 #' Emissions\|CO2\|Land\|++\|Below Ground Carbon | Mt CO2/yr | CO2 flux from below ground carbon pools
 #'
+#' @section CO2 edge degradation:
+#' Name | Unit | Meta
+#' ---|---|---
+#' Emissions\|CO2\|Land\|Edge Degradation\|Stock | Mt CO2 | Total vegetation carbon removed by forest edge degradation (stock)
+#' Emissions\|CO2\|Land\|Edge Degradation\|Flow | Mt CO2/yr | Change in edge carbon degradation per year (emission flow)
+#'
 #' @section CO2 land carbon sink (yearly):
 #' Name | Unit | Meta
 #' ---|---|---
@@ -623,6 +629,38 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   }
 
   # nolint end
+
+  # -----------------------------------------------------------------------------------------------------------------
+  # Edge carbon degradation (separate from LUC bookkeeping)
+  # p35_edge_carbon_loss(t,j) = total vegC removed by edge effects (Mio tC)
+  # This is a stock quantity; the emission flow is its change over time.
+
+  edgeCarbonLoss <- readGDX(gdx, "p35_edge_carbon_loss", react = "silent")
+  if (!is.null(edgeCarbonLoss)) {
+    # Aggregate to reporting level (sum over cells)
+    edgeCarbonLoss <- superAggregateX(edgeCarbonLoss, aggr_type = "sum", level = level)
+    # Convert Mio tC -> Mt CO2
+    edgeCarbonStock <- edgeCarbonLoss * 44 / 12
+    # Flow = change in stock / timestep length (Mt CO2/yr)
+    timestepLength <- m_yeardiff(gdx)
+    edgeCarbonFlow <- edgeCarbonStock
+    edgeCarbonFlow[, 1, ] <- NA
+    years <- getYears(edgeCarbonStock, as.integer = TRUE)
+    for (i in seq_along(years)[-1]) {
+      edgeCarbonFlow[, i, ] <- (edgeCarbonStock[, i, ] - edgeCarbonStock[, i - 1, ]) /
+                                timestepLength[, i, ]
+    }
+    edgeCarbonFlow <- collapseNames(edgeCarbonFlow)
+    edgeCarbonStock <- collapseNames(edgeCarbonStock)
+
+    # nolint start: line_length_linter
+    emissionsReport <- mbind(
+      emissionsReport,
+      setNames(edgeCarbonStock, "Emissions|CO2|Land|Edge Degradation|Stock (Mt CO2)"),
+      setNames(edgeCarbonFlow,  "Emissions|CO2|Land|Edge Degradation|Flow (Mt CO2/yr)")
+    )
+    # nolint end
+  }
 
   # -----------------------------------------------------------------------------------------------------------------
   # Yearly indirect CO2 emissions from land-use change (land-carbon sink) reporting

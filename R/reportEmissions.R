@@ -612,7 +612,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
 
   checkEmis <- emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] -
     dimSums(emissionsReport[, , c("Emissions|CO2|Land|Land-use Change|+|Deforestation (Mt CO2/yr)",
-                                    "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)",
                                     "Emissions|CO2|Land|Land-use Change|+|Other land conversion (Mt CO2/yr)",
                                     "Emissions|CO2|Land|Land-use Change|+|Regrowth (Mt CO2/yr)",
                                     "Emissions|CO2|Land|Land-use Change|+|Peatland (Mt CO2/yr)",
@@ -640,7 +640,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     # Flow = change in stock / timestep length (Mt CO2/yr)
     timestepLength <- m_yeardiff(gdx)
     edgeCarbonFlow <- edgeCarbonStock
-    edgeCarbonFlow[, 1, ] <- NA
+    edgeCarbonFlow[, 1, ] <- 0
     years <- getYears(edgeCarbonStock, as.integer = TRUE)
     for (i in seq_along(years)[-1]) {
       edgeCarbonFlow[, i, ] <- (edgeCarbonStock[, i, ] - edgeCarbonStock[, i - 1, ]) /

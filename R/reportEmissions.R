@@ -25,9 +25,12 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Secondary forests | Mt CO2/yr | CO2 emissions from deforestation of secondary forests
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Forestry plantations | Mt CO2/yr | CO2 emissions from deforestation of forestry plantations
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Cropland Tree Cover | Mt CO2/yr | CO2 emissions from removal of trees on cropland
-#' Emissions\|CO2\|Land\|Land-use Change\|+\|Forest degradation | Mt CO2/yr | CO2 emissions from forest degradation and shifting cultivation
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Primary forests | Mt CO2/yr | CO2 emissions from degradation of primary forests
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Secondary forests | Mt CO2/yr | CO2 emissions from degradation of secondary forests
+#' Emissions\|CO2\|Land\|Land-use Change\|+\|Forest degradation | Mt CO2/yr | CO2 emissions from forest degradation (shifting cultivation + edge effects)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Shifting cultivation | Mt CO2/yr | CO2 emissions from shifting cultivation
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Shifting cultivation\|+\|Primary forests | Mt CO2/yr | CO2 emissions from shifting cultivation in primary forests
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Shifting cultivation\|+\|Secondary forests | Mt CO2/yr | CO2 emissions from shifting cultivation in secondary forests
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Edge degradation | Mt CO2/yr | CO2 emissions from forest edge carbon degradation
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Stock | Mt CO2 | Total vegetation carbon removed by edge effects (stock)
 #' Emissions\|CO2\|Land\|Land-use Change\|+\|Other land conversion | Mt CO2/yr | CO2 emissions from conversion of other natural land
 #' Emissions\|CO2\|Land\|Land-use Change\|+\|Regrowth | Mt CO2/yr | CO2 removals from forest regrowth (negative values)
 #' Emissions\|CO2\|Land\|Land-use Change\|Regrowth\|+\|CO2-price AR | Mt CO2/yr | CO2 removals from afforestation/reforestation driven by CO2 price
@@ -58,12 +61,6 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Residual\|+\|Negative | Mt CO2/yr | Negative residual CO2 flux
 #' Emissions\|CO2\|Land\|++\|Above Ground Carbon | Mt CO2/yr | CO2 flux from above ground carbon pools
 #' Emissions\|CO2\|Land\|++\|Below Ground Carbon | Mt CO2/yr | CO2 flux from below ground carbon pools
-#'
-#' @section CO2 edge degradation:
-#' Name | Unit | Meta
-#' ---|---|---
-#' Emissions\|CO2\|Land\|Edge Degradation\|Stock | Mt CO2 | Total vegetation carbon removed by forest edge degradation (stock)
-#' Emissions\|CO2\|Land\|Edge Degradation\|Flow | Mt CO2/yr | Change in edge carbon degradation per year (emission flow)
 #'
 #' @section CO2 land carbon sink (yearly):
 #' Name | Unit | Meta
@@ -533,10 +530,10 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     setNames(deforestation[, , "secdforest"],     "Emissions|CO2|Land|Land-use Change|Deforestation|+|Secondary forests (Mt CO2/yr)"),
     setNames(deforestation[, , "forestry_plant"], "Emissions|CO2|Land|Land-use Change|Deforestation|+|Forestry plantations (Mt CO2/yr)"),
 
-    # Gross emissions - Degradataion
-    setNames(dimSums(degradation, dim = 3),       "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
-    setNames(degradation[, , "primforest"],       "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Primary forests (Mt CO2/yr)"),
-    setNames(degradation[, , "secdforest"],       "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Secondary forests (Mt CO2/yr)"),
+    # Gross emissions - Degradation (shifting cultivation)
+    setNames(dimSums(degradation, dim = 3),       "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"),
+    setNames(degradation[, , "primforest"],       "Emissions|CO2|Land|Land-use Change|Forest degradation|Shifting cultivation|+|Primary forests (Mt CO2/yr)"),
+    setNames(degradation[, , "secdforest"],       "Emissions|CO2|Land|Land-use Change|Forest degradation|Shifting cultivation|+|Secondary forests (Mt CO2/yr)"),
 
     # Gross emissions - Other conversion
     setNames(dimSums(other_conversion[, , otherSet], dim = 3), "Emissions|CO2|Land|Land-use Change|+|Other land conversion (Mt CO2/yr)"),
@@ -631,13 +628,12 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   # nolint end
 
   # -----------------------------------------------------------------------------------------------------------------
-  # Edge carbon degradation (separate from LUC bookkeeping)
+  # Edge carbon degradation — integrated into LUC emissions
   # p35_edge_carbon_loss(t,j) = total vegC removed by edge effects (Mio tC)
-  # This is a stock quantity; the emission flow is its change over time.
+  # The emission flow is the change in this stock over time.
 
   edgeCarbonLoss <- readGDX(gdx, "p35_edge_carbon_loss", react = "silent")
   if (!is.null(edgeCarbonLoss)) {
-    # Aggregate to reporting level (sum over cells)
     edgeCarbonLoss <- superAggregateX(edgeCarbonLoss, aggr_type = "sum", level = level)
     # Convert Mio tC -> Mt CO2
     edgeCarbonStock <- edgeCarbonLoss * 44 / 12
@@ -653,13 +649,32 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     edgeCarbonFlow <- collapseNames(edgeCarbonFlow)
     edgeCarbonStock <- collapseNames(edgeCarbonStock)
 
+    # Degradation total = shifting cultivation + edge degradation
+    shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
+    degradTotal <- shiftingCult + edgeCarbonFlow
+
+    # Add edge flow to LUC total and overall total
+    emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] <-
+      emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] + edgeCarbonFlow
+    emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] <-
+      emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] + edgeCarbonFlow
+
     # nolint start: line_length_linter
     emissionsReport <- mbind(
       emissionsReport,
-      setNames(edgeCarbonStock, "Emissions|CO2|Land|Edge Degradation|Stock (Mt CO2)"),
-      setNames(edgeCarbonFlow,  "Emissions|CO2|Land|Edge Degradation|Flow (Mt CO2/yr)")
+      setNames(degradTotal,     "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
+      setNames(edgeCarbonFlow,  "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
+      setNames(edgeCarbonStock, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Stock (Mt CO2)")
     )
     # nolint end
+  } else {
+    # No edge effects — degradation total = shifting cultivation only
+    emissionsReport <- mbind(
+      emissionsReport,
+      setNames(
+        emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"],
+        "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)")
+    )
   }
 
   # -----------------------------------------------------------------------------------------------------------------
@@ -760,10 +775,10 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     setNames(deforestation[, , "secdforest"],     "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Permanent deforestation|+|Secondary forests (Gt CO2)"),
     setNames(deforestation[, , "forestry_plant"], "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Permanent deforestation|+|Forestry plantations (Gt CO2)"),
 
-    # Gross emissions - Deforestation: Degradation/Shifting cultivation
-    setNames(dimSums(degradation, dim = 3),       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|+|Forest degradation (Gt CO2)"),
-    setNames(degradation[, , "primforest"],       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Forest degradation|+|Primary forests (Gt CO2)"),
-    setNames(degradation[, , "secdforest"],       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Forest degradation|+|Secondary forests (Gt CO2)"),
+    # Gross emissions - Deforestation: Shifting cultivation
+    setNames(dimSums(degradation, dim = 3),       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|+|Shifting cultivation (Gt CO2)"),
+    setNames(degradation[, , "primforest"],       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Shifting cultivation|+|Primary forests (Gt CO2)"),
+    setNames(degradation[, , "secdforest"],       "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Shifting cultivation|+|Secondary forests (Gt CO2)"),
 
     # Gross emissions - Other conversion
     setNames(dimSums(other_conversion[, , otherSet], dim = 3), "Emissions|CO2|Land|Cumulative|Land-use Change|+|Other land conversion (Gt CO2)"),

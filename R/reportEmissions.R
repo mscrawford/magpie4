@@ -647,12 +647,9 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
       timestepLength <- m_yeardiff(gdx)
       edgeCarbonFlow <- pipelineRelease * 44 / 12 / timestepLength
 
-      # Pipeline stock diagnostic (Mio tC -> Mt CO2)
-      pipelineStock <- readGDX(gdx, "p35_edge_pipeline", react = "silent")
-      if (!is.null(pipelineStock)) {
-        pipelineStock <- superAggregateX(pipelineStock, aggr_type = "sum", level = level)
-        pipelineStock <- pipelineStock * 44 / 12
-      }
+      # Pipeline stock: p35_edge_pipeline(j) has no time index in GDX
+      # (only final-period value saved), so skip time-series diagnostic
+      pipelineStock <- NULL
     } else {
       # Instant mode: flow = change in stock / timestep length (Mt CO2/yr)
       timestepLength <- m_yeardiff(gdx)

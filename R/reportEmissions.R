@@ -630,21 +630,40 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   # -----------------------------------------------------------------------------------------------------------------
   # Edge carbon degradation — integrated into LUC emissions
   # p35_edge_carbon_loss(t,j) = total vegC removed by edge effects (Mio tC)
-  # The emission flow is the change in this stock over time.
+  # p35_edge_pipeline_release(t,j) = pipeline release per period (Mio tC) [if pipeline enabled]
+  # The emission flow is either pipeline release or change in stock over time.
 
   edgeCarbonLoss <- readGDX(gdx, "p35_edge_carbon_loss", react = "silent")
   if (!is.null(edgeCarbonLoss)) {
     edgeCarbonLoss <- superAggregateX(edgeCarbonLoss, aggr_type = "sum", level = level)
     # Convert Mio tC -> Mt CO2
     edgeCarbonStock <- edgeCarbonLoss * 44 / 12
-    # Flow = change in stock / timestep length (Mt CO2/yr)
-    timestepLength <- m_yeardiff(gdx)
-    edgeCarbonFlow <- edgeCarbonStock
-    edgeCarbonFlow[, 1, ] <- 0
-    years <- getYears(edgeCarbonStock, as.integer = TRUE)
-    for (i in seq_along(years)[-1]) {
-      edgeCarbonFlow[, i, ] <- (edgeCarbonStock[, i, ] - edgeCarbonStock[, i - 1, ]) /
-                                timestepLength[, i, ]
+
+    # Check for pipeline-based reporting
+    pipelineRelease <- readGDX(gdx, "p35_edge_pipeline_release", react = "silent")
+    if (!is.null(pipelineRelease)) {
+      # Pipeline mode: flow = pipeline release / timestep length
+      pipelineRelease <- superAggregateX(pipelineRelease, aggr_type = "sum", level = level)
+      timestepLength <- m_yeardiff(gdx)
+      edgeCarbonFlow <- pipelineRelease * 44 / 12 / timestepLength
+
+      # Pipeline stock diagnostic (Mio tC -> Mt CO2)
+      pipelineStock <- readGDX(gdx, "p35_edge_pipeline", react = "silent")
+      if (!is.null(pipelineStock)) {
+        pipelineStock <- superAggregateX(pipelineStock, aggr_type = "sum", level = level)
+        pipelineStock <- pipelineStock * 44 / 12
+      }
+    } else {
+      # Instant mode: flow = change in stock / timestep length (Mt CO2/yr)
+      timestepLength <- m_yeardiff(gdx)
+      edgeCarbonFlow <- edgeCarbonStock
+      edgeCarbonFlow[, 1, ] <- 0
+      years <- getYears(edgeCarbonStock, as.integer = TRUE)
+      for (i in seq_along(years)[-1]) {
+        edgeCarbonFlow[, i, ] <- (edgeCarbonStock[, i, ] - edgeCarbonStock[, i - 1, ]) /
+                                  timestepLength[, i, ]
+      }
+      pipelineStock <- NULL
     }
     edgeCarbonFlow <- collapseNames(edgeCarbonFlow)
     edgeCarbonStock <- collapseNames(edgeCarbonStock)
@@ -660,12 +679,19 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
       emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] + edgeCarbonFlow
 
     # nolint start: line_length_linter
-    emissionsReport <- mbind(
-      emissionsReport,
+    reportVars <- mbind(
       setNames(degradTotal,     "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
       setNames(edgeCarbonFlow,  "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
       setNames(edgeCarbonStock, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Stock (Mt CO2)")
     )
+    if (!is.null(pipelineStock)) {
+      pipelineStock <- collapseNames(pipelineStock)
+      reportVars <- mbind(
+        reportVars,
+        setNames(pipelineStock, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Pipeline (Mt CO2)")
+      )
+    }
+    emissionsReport <- mbind(emissionsReport, reportVars)
     # nolint end
   } else {
     # No edge effects — degradation total = shifting cultivation only

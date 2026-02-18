@@ -639,9 +639,10 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     # Convert Mio tC -> Mt CO2
     edgeCarbonStock <- edgeCarbonLoss * 44 / 12
 
-    # Check for pipeline-based reporting
+    # Check for pipeline-based reporting (s35_edge_pipeline = 1)
+    pipelineSwitch <- readGDX(gdx, "s35_edge_pipeline", react = "silent")
     pipelineRelease <- readGDX(gdx, "p35_edge_pipeline_release", react = "silent")
-    if (!is.null(pipelineRelease)) {
+    if (!is.null(pipelineSwitch) && pipelineSwitch == 1 && !is.null(pipelineRelease)) {
       # Pipeline mode: flow = pipeline release / timestep length
       pipelineRelease <- superAggregateX(pipelineRelease, aggr_type = "sum", level = level)
       timestepLength <- m_yeardiff(gdx)

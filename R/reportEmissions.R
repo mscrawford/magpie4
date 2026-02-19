@@ -691,6 +691,10 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     edgeInstantFlow <- collapseNames(edgeInstantFlow)
     realizedStock   <- collapseNames(realizedLoss * 44 / 12)
 
+    # y1995 = initial period, no meaningful flow (matches other forest parameters)
+    edgeCarbonFlow[, 1, ]  <- NA
+    edgeInstantFlow[, 1, ] <- NA
+
     # Degradation total = shifting cultivation + edge degradation (pipeline)
     shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
     degradTotal <- shiftingCult + edgeCarbonFlow

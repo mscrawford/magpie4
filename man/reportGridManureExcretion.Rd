@@ -4,21 +4,31 @@
 \alias{reportGridManureExcretion}
 \title{reportGridManureExcretion}
 \usage{
-reportGridManureExcretion(gdx)
+reportGridManureExcretion(gdx, confinementWeighting = "livestock")
 }
 \arguments{
 \item{gdx}{GDX file}
+
+\item{confinementWeighting}{Weighting for disaggregating the confinement loss/recycling
+outputs to grid: "livestock" (default; \code{ManureExcretion} livestock-location weights, the
+established behaviour of this report) or "cropland" (by cropland area, as used by
+\code{getReportGridNitrogenPollution}).}
 }
 \value{
 MAgPIE object
 }
 \description{
-reports Manure with reprting names on grid level.
+Reports manure excretion and confinement losses at grid level (0.5 degree).
 }
-\section{Grid-level manure excretion}{
+\section{Confinement weighting}{
 
-This function produces grid-level (0.5 degree) manure excretion and management data.
-Includes total manure, breakdown by AWMS and livestock type, and losses from confinement.
+Summary outputs (\code{Manure}, \verb{Manure|+|...}, \verb{Manure|++|...}) use livestock-location
+weights (\code{ManureExcretion}). The confinement loss/recycling outputs follow
+\code{confinementWeighting}: "livestock" (default) uses the \code{ManureExcretion} weights, so all
+outputs of this report share one weighting; "cropland" distributes by cropland area, matching the
+cropland+pasture denominator in \code{getReportGridNitrogenPollution}, which requests it explicitly.
+Under "cropland", confinement and summary outputs do not balance per grid cell, though cluster
+totals are conserved.
 }
 
 \examples{
@@ -28,5 +38,5 @@ x <- reportGridManureExcretion(gdx)
 
 }
 \author{
-Benjamin Leon Bodirsky
+Benjamin Leon Bodirsky, Michael Crawford
 }

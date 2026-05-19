@@ -10,6 +10,9 @@
 #' disk, and only returned to the calling function.
 #' @param scenario the name of the scenario used. If NULL the report is not saved to disk, and only returned to the
 #' calling function.
+#' @param confinementWeighting passed through to \code{reportGridManureExcretion}: spatial weighting for
+#' disaggregating confinement manure losses to grid cells, "cropland" (default) or "livestock". See that
+#' function's documentation for details.
 #'
 #' @return A list of MAgPIE objects containing the reports
 #'
@@ -19,13 +22,19 @@
 #'     x <- getReportGridNitrogenPollution()
 #'   }
 
-getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario = NULL) {
+getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario = NULL, confinementWeighting = "cropland") {
 
     # -----------------------------------------------------------------------------------------------------------------
     # Helper functions
 
     .formatReport <- function(x, name) {
-        getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        # Handle both 2-subdim (x.y) and 3-subdim (x.y.iso) spatial structures
+        currentSets <- getSets(x)
+        if ("d1.3" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        } else if ("d1.2" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2")] <- c("x", "y")
+        }
         getSets(x, fulldim = FALSE)[3] <- "variable"
         getNames(x) <- name
         return(x)
@@ -63,7 +72,7 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     pastureSurplus <- .formatReport(pastureSurplus, "Nutrient surplus from pasture")
 
     # Manure in confinements
-    manureBudget  <- reportGridManureExcretion(gdx)
+    manureBudget  <- reportGridManureExcretion(gdx, confinementWeighting = confinementWeighting)
     manureSurplus <- manureBudget[, , "Manure|Manure In Confinements|+|Losses"]
     manureSurplus <- .formatReport(
         manureSurplus,
@@ -159,8 +168,11 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     # Exceedance of critical nitrogen surplus (based on Schulte-Uebbing et al. 2022)
 
     surplusExceedances <- NULL
+    # Look for critical surplus file in output directory, or in gdx directory if reportOutputDir is NULL
+    gdxDir <- dirname(gdx)
+    searchDir <- if (!is.null(reportOutputDir)) reportOutputDir else gdxDir
     criticalNitrogenSurplusPath <- file.path(
-        "criticalNitrogenSurplus_0.5.mz"
+        searchDir, "criticalNitrogenSurplus_0.5.mz"
     )
 
     if (file.exists(criticalNitrogenSurplusPath)) {

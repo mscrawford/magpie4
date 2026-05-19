@@ -76,18 +76,16 @@ NitrogenBudget <- memoise(function(gdx, include_emissions = FALSE,
     manureConfinement <- readGDX(gdx, "ov_manure_confinement", select = list(type = "level"))[, , "nr"]
     recyclingShare <- readGDX(gdx, "i55_manure_recycling_share")[, , "nr"]
     manureRecycling <- dimSums(manureConfinement * recyclingShare, dim = c(3.2, 3.3))
-    manureRecycling <- gdxAggregate(gdx = gdx, weight = "ManureExcretion", x = manureRecycling,
-                                    to = level, absolute = TRUE, products = readGDX(gdx, "kli"),
-                                    awms = "confinement", agg = "awms")
-    manure <- dimSums(manureRecycling, dim = 3)
+    manureRecycling <- dimSums(manureRecycling, dim = 3)
+    manure <- gdxAggregate(gdx = gdx, weight = "land", x = manureRecycling,
+                           to = level, absolute = TRUE, types = "crop")
 
     croplandgrazing <- dimSums(readGDX(gdx, "ov_manure",
                                        select = list(type = "level"))[, , "stubble_grazing"][, , "nr"],
                                dim = c(3.2, 3.3))
-    croplandgrazing <- gdxAggregate(gdx = gdx, weight = "ManureExcretion", x = croplandgrazing,
-                                    to = level, absolute = TRUE, products = readGDX(gdx, "kli"),
-                                    awms = "stubble_grazing", agg = "awms")
     croplandgrazing <- dimSums(croplandgrazing, dim = 3)
+    croplandgrazing <- gdxAggregate(gdx = gdx, weight = "land", x = croplandgrazing,
+                                    to = level, absolute = TRUE, types = "crop")
 
     dep <- readGDX(gdx, "ov50_nr_deposition")[, , "crop"][, , "level"]
     dep <- gdxAggregate(gdx = gdx, weight = "land", x = dep, to = level, absolute = TRUE, types = "crop")

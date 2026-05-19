@@ -1,33 +1,66 @@
 #' @title reportGridManureExcretion
-#' @description reports Manure with reprting names on grid level.
+#' @description Reports manure excretion and confinement losses at grid level (0.5 degree).
 #'
 #' @export
 #'
 #' @param gdx GDX file
+#' @param confinementWeighting Weighting for disaggregating the confinement loss/recycling
+#'   outputs to grid: "livestock" (default; `ManureExcretion` livestock-location weights, the
+#'   established behaviour of this report) or "cropland" (by cropland area, as used by
+#'   `getReportGridNitrogenPollution`).
 #'
 #' @return MAgPIE object
-#' @author Benjamin Leon Bodirsky
+#' @author Benjamin Leon Bodirsky, Michael Crawford
 #' @examples
 #' \dontrun{
 #' x <- reportGridManureExcretion(gdx)
 #' }
 #'
-#' @section Grid-level manure excretion:
-#' This function produces grid-level (0.5 degree) manure excretion and management data.
-#' Includes total manure, breakdown by AWMS and livestock type, and losses from confinement.
+#' @section Confinement weighting:
+#' Summary outputs (`Manure`, `Manure|+|...`, `Manure|++|...`) use livestock-location
+#' weights (`ManureExcretion`). The confinement loss/recycling outputs follow
+#' `confinementWeighting`: "livestock" (default) uses the `ManureExcretion` weights, so all
+#' outputs of this report share one weighting; "cropland" distributes by cropland area, matching the
+#' cropland+pasture denominator in `getReportGridNitrogenPollution`, which requests it explicitly.
+#' Under "cropland", confinement and summary outputs do not balance per grid cell, though cluster
+#' totals are conserved.
 #' @md
 
-#'
-reportGridManureExcretion <- function(gdx) {
+reportGridManureExcretion <- function(gdx, confinementWeighting = "livestock") {
 
+  confinementWeighting <- match.arg(confinementWeighting, c("livestock", "cropland"))
+
+  # Section 1: summary outputs, livestock-location weighting via ManureExcretion.
   manure <- ManureExcretion(gdx, level = "grid")
   awms <- dimSums(manure, dim = "kli")
   kli <- dimSums(manure, dim = "awms")
-  confinement <- collapseNames(manure[, , "confinement"])
 
+  # Section 2: confinement disaggregation, gated by confinementWeighting (see @section).
+  # Both branches set vm_manure_confinement and confinement_agri for Sections 3-4.
   vm_manure_confinement <- collapseNames(readGDX(gdx, "ov_manure_confinement")[, , "level"][, , "nr"])
-  vm_manure_confinement <- gdxAggregate(gdx = gdx, x = vm_manure_confinement, weight = manure[, , "confinement"], to = "grid", absolute = TRUE)
 
+  if (confinementWeighting == "cropland") {
+    # cropland-area weighting (default)
+    confinement_cluster <- collapseNames(
+      readGDX(gdx, "ov_manure", select = list(type = "level"))[, , "confinement"][, , "nr"]
+    )
+    confinement_agri <- dimSums(confinement_cluster, dim = 3)
+    confinement_agri <- gdxAggregate(gdx = gdx, x = confinement_agri,
+                                     weight = "land", types = "crop",
+                                     to = "grid", absolute = TRUE)
+    vm_manure_confinement <- gdxAggregate(gdx = gdx, x = vm_manure_confinement,
+                                          weight = "land", types = "crop",
+                                          to = "grid", absolute = TRUE)
+  } else {
+    # livestock-location weighting (pre-2026): ManureExcretion confinement output
+    confinement <- collapseNames(manure[, , "confinement"])
+    confinement_agri <- dimSums(confinement, dim = 3)
+    vm_manure_confinement <- gdxAggregate(gdx = gdx, x = vm_manure_confinement,
+                                          weight = manure[, , "confinement"],
+                                          to = "grid", absolute = TRUE)
+  }
+
+  # Section 3: emission fate shares (destiny, dimensionless) applied to vm_manure_confinement.
   pollutants <- c("n2o_n_direct", "nh3_n", "no2_n", "no3_n")
   f55_awms_recycling_share <- readGDX(gdx, "f55_awms_recycling_share")
   f51_ef3_confinement <- readGDX(gdx, "f51_ef3_confinement")
@@ -48,15 +81,17 @@ reportGridManureExcretion <- function(gdx) {
   emis2 <- dimSums(emis2, dim = "awms_conf")
   destiny <- mbind(emis1, emis2)
 
+  # Section 4: assemble outputs.
   total <- setNames(dimSums(manure), "Manure")
   getNames(awms) <- paste0("Manure|+|", reportingnames(getNames(awms)))
   getNames(kli) <- paste0("Manure|++|", reportingnames(getNames(kli)))
 
+  # confinement loss/recycling outputs (see @section for the grid-level balance caveat)
   losses <- dimSums(destiny[, , pollutants], dim = "kli")
   getNames(losses) <- paste0("Manure|Manure In Confinements|Losses|", reportingnames(getNames(losses)))
   recycling <- dimSums(destiny[, , "recycling"], dim = "kli")
   getNames(recycling) <- paste0("Manure|Manure In Confinements|+|Recycled")
-  confinement_loss <- dimSums(confinement, dim = 3) - recycling
+  confinement_loss <- confinement_agri - recycling
   getNames(confinement_loss) <- paste0("Manure|Manure In Confinements|+|Losses")
 
   out <- mbind(total, awms, kli, recycling, confinement_loss, losses)

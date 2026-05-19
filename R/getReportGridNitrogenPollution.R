@@ -10,6 +10,9 @@
 #' disk, and only returned to the calling function.
 #' @param scenario the name of the scenario used. If NULL the report is not saved to disk, and only returned to the
 #' calling function.
+#' @param confinementWeighting passed through to \code{reportGridManureExcretion}: spatial weighting for
+#' disaggregating confinement manure losses to grid cells, "cropland" (default) or "livestock". See that
+#' function's documentation for details.
 #'
 #' @return A list of MAgPIE objects containing the reports
 #'
@@ -19,23 +22,29 @@
 #'     x <- getReportGridNitrogenPollution()
 #'   }
 
-getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario = NULL) {
+getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario = NULL, confinementWeighting = "cropland") {
 
     # -----------------------------------------------------------------------------------------------------------------
     # Helper functions
 
     .formatReport <- function(x, name) {
-        getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        # Handle both 2-subdim (x.y) and 3-subdim (x.y.iso) spatial structures
+        currentSets <- getSets(x)
+        if ("d1.3" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2", "d1.3")] <- c("x", "y", "iso")
+        } else if ("d1.2" %in% names(currentSets)) {
+            getSets(x)[c("d1.1", "d1.2")] <- c("x", "y")
+        }
         getSets(x, fulldim = FALSE)[3] <- "variable"
         getNames(x) <- name
         return(x)
     }
 
     .saveReport <- function(x, file, comment = NULL) {
-        if (!is.null(reportOutputDir) && !is.null(scenario)) {
+        if (!is.null(reportOutputDir)) {
             write.magpie(
                 x,
-                file_name = file.path(reportOutputDir, paste0(scenario, "-", file, ".nc")),
+                file_name = file.path(reportOutputDir, paste0(file, ".nc")),
                 comment = comment
             )
         }
@@ -63,7 +72,7 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     pastureSurplus <- .formatReport(pastureSurplus, "Nutrient surplus from pasture")
 
     # Manure in confinements
-    manureBudget  <- reportGridManureExcretion(gdx)
+    manureBudget  <- reportGridManureExcretion(gdx, confinementWeighting = confinementWeighting)
     manureSurplus <- manureBudget[, , "Manure|Manure In Confinements|+|Losses"]
     manureSurplus <- .formatReport(
         manureSurplus,
@@ -121,24 +130,24 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
 
     # Cropland surplus intensity
     nutrientSurplus_cropland_perHa <- (croplandSurplus / gridLand[, , "Cropland"]) * 1e3
-    nutrientSurplus_cropland_perHa[gridLand[, , "Cropland"] < 1e-5] <- 0
+    nutrientSurplus_cropland_perHa[gridLand[, , "Cropland"] < 1e-6] <- 0
     nutrientSurplus_cropland_perHa <- .formatReport(nutrientSurplus_cropland_perHa, "Nutrient surplus intensity from cropland")
 
     # Pasture surplus intensity
     nutrientSurplus_pasture_perHa <- (pastureSurplus / gridLand[, , "Pastures and Rangelands"]) * 1e3
-    nutrientSurplus_pasture_perHa[gridLand[, , "Pastures and Rangelands"] < 1e-5] <- 0
+    nutrientSurplus_pasture_perHa[gridLand[, , "Pastures and Rangelands"] < 1e-6] <- 0
     nutrientSurplus_pasture_perHa <- .formatReport(nutrientSurplus_pasture_perHa, "Nutrient surplus intensity from pasture")
 
     # Agricultural Area
     agriArea  <- gridLand[, , "Cropland"] + gridLand[, , "Pastures and Rangelands"]  # Mha
     nutrientSurplus_agriAWMS_perHa <- (agriAWMS / agriArea) * 1e3
-    nutrientSurplus_agriAWMS_perHa[agriArea < 1e-5] <- 0
+    nutrientSurplus_agriAWMS_perHa[agriArea < 1e-6] <- 0
     nutrientSurplus_agriAWMS_perHa <- .formatReport(nutrientSurplus_agriAWMS_perHa, "Nutrient surplus intensity from agricultural land and manure management")
 
     # All land
     totalArea <- dimSums(gridLand, dim = 3)
     nutrientSurplus_perTotalAreaHa <- (surplusTotal / totalArea) * 1e3
-    nutrientSurplus_perTotalAreaHa[totalArea < 1e-5] <- 0
+    nutrientSurplus_perTotalAreaHa[totalArea < 1e-6] <- 0
     nutrientSurplus_perTotalAreaHa <- .formatReport(nutrientSurplus_perTotalAreaHa, "Nutrient surplus intensity from all land and manure management")
 
     surplusIntensities <- mbind(
@@ -159,8 +168,11 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
     # Exceedance of critical nitrogen surplus (based on Schulte-Uebbing et al. 2022)
 
     surplusExceedances <- NULL
+    # Look for critical surplus file in output directory, or in gdx directory if reportOutputDir is NULL
+    gdxDir <- dirname(gdx)
+    searchDir <- if (!is.null(reportOutputDir)) reportOutputDir else gdxDir
     criticalNitrogenSurplusPath <- file.path(
-        "criticalNitrogenSurplus_0.5.mz"
+        searchDir, "criticalNitrogenSurplus_0.5.mz"
     )
 
     if (file.exists(criticalNitrogenSurplusPath)) {
@@ -169,6 +181,14 @@ getReportGridNitrogenPollution <- function(gdx, reportOutputDir = NULL, scenario
             criticalNitrogenSurplus,
             dim = c(2, 3)
         )
+
+        # Expand critical nitrogen surplus across all years of the nutrient surplus
+        # (criticalNitrogenSurplus has y2010 only, but surplus spans multiple years)
+        yearsNeeded <- getYears(nutrientSurplus_agriAWMS_perHa)
+        if (length(getYears(criticalNitrogenSurplus)) == 1 && length(yearsNeeded) > 1) {
+            criticalNitrogenSurplus <- criticalNitrogenSurplus[, rep(1, length(yearsNeeded)), ]
+            getYears(criticalNitrogenSurplus) <- yearsNeeded
+        }
 
         # Calculate exceedance of the critical nitrogen surplus
         # Schulte-Uebbing et al. 2022 already subtracts non-agricultural land surplus

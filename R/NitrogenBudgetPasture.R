@@ -28,7 +28,7 @@ NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg")
   dep   <- gdxAggregate(gdx = gdx, weight = "land", x = dep, to = level, absolute = TRUE, types = "past")
 
   fix   <- land(gdx)[, , "past"] * readGDX(gdx, "f50_nr_fixation_rates_pasture")[, getYears(harvest), ]
-  fix   <- gdxAggregate(gdx = gdx, weight = "production", x = fix, to = level, absolute = TRUE, products = "pasture", attributes = "nr")
+  fix   <- gdxAggregate(gdx = gdx, weight = "land", x = fix, to = level, absolute = TRUE, types = "past")
 
   out <- mbind(
     setNames(harvest, "harvest"),
@@ -48,7 +48,8 @@ NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg")
     } else if (level %in% c("grid","iso")) {
       clustermap_filepath <- Sys.glob(file.path(dirname(normalizePath(gdx)), "clustermap*.rds"))
       if(length(clustermap_filepath)==1) {
-        mapping <- readRDS(clustermap_filepath)[, c("region", "cell")]
+        clustermap <- readRDS(clustermap_filepath)
+        mapping <- clustermap[, c("region", "cell")]
         names(mapping) <- c("i", "j")
       } else {
         stop("No mapping for toolFertilizerDistribution found")
@@ -89,9 +90,11 @@ NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg")
       "surplus"
     )
 
-    clustermap_filepath <- readRDS(Sys.glob(file.path(dirname(normalizePath(gdx)), "clustermap*.rds")))
-    for (region_x in unique(clustermap_filepath$region)) {
-      cells <- clustermap_filepath$cell[which(clustermap_filepath$region == region_x)]
+    if (!exists("clustermap", inherits = FALSE)) {
+      clustermap <- readRDS(Sys.glob(file.path(dirname(normalizePath(gdx)), "clustermap*.rds")))
+    }
+    for (region_x in unique(clustermap$region)) {
+      cells <- clustermap$cell[which(clustermap$region == region_x)]
 
       message(paste0("balanceflow is a max of ",
                      round(max(dimSums(balanceflow[cells, , ], dim = 1) /

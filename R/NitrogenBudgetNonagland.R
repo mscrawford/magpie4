@@ -58,7 +58,7 @@ NitrogenBudgetNonagland<-function(gdx, level="reg"){
     out,
     add_dimension(
       dimSums(out,dim=3.1),dim = 3.1,add = "budget",
-      nm <- "surplus"
+      nm = "surplus"
     )
   )
 

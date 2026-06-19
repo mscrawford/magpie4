@@ -640,21 +640,47 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
   if (!is.null(edgeCarbonLoss)) {
     # --- Temporal pipeline parameters ---
     # tau: e-folding time for edge degradation (yr), from Brinck et al. 2017
-    # tHist: duration of pre-1995 fragmentation history (yr), calibrated to Brinck 0.34 GtC/yr
-    edgeTau   <- 13
-    edgeTHist <- 41
+    edgeTau <- 13
+    # rInit: fraction of the equilibrium edge deficit already realized at the 1995 start;
+    # (1 - rInit) is the pre-1995 "pipeline backlog" that the recursion releases over
+    # 2000-2050. Set to 1: the 1995 backlog is structurally ~empty - forests sit near the
+    # edge-maximizing fraction p* where edge-affected area is insensitive to historical
+    # forest loss (robust to FAO 2x / gross 3.3x; see audit/edge_thist_replacement/
+    # RINIT_INVESTIGATION.md). The former 0.6965 came from T_hist=41yr back-calibrated to
+    # Brinck's 0.34 GtC/yr legacy flux; that calibration is removed.
+    #   legacy: edgeTHist <- 41; rInit <- 1 - (edgeTau/edgeTHist)*(1 - exp(-edgeTHist/edgeTau))
+    rInit <- 1
 
     timestepLength <- m_yeardiff(gdx)
     years <- getYears(edgeCarbonLoss, as.integer = TRUE)
 
-    # --- Compute pipeline: realized loss tracks equilibrium with exponential lag ---
-    # realized(t) += alpha * (equilibrium(t) - realized(t))
-    # alpha = 1 - exp(-dt/tau)
-    # At t=1: realized = equilibrium * r, where r = 1 - (tau/T_hist)(1 - exp(-T_hist/tau))
-    realizedLoss <- edgeCarbonLoss * 0
-    pipelineFlow <- edgeCarbonLoss * 0
+    # --- edgeAreaSplit: route AREA-driven changes in the edge deficit to the deforestation
+    # channel instead of the edge flux. p35_edge_carbon_loss L = ell*A moves with forest AREA as
+    # well as edge intensity/density; piping the level L makes deforestation of an edged cell show
+    # up as spurious NEGATIVE edge flux (apparent recovery) and erases the real historical edge
+    # emission on cells later cleared. Asymmetric fix (audit/edge_thist_replacement/
+    # EDGE_AREA_SPLIT.md): deforestation (A down) -> the committed (realized) edge loss on the
+    # cleared fraction leaves SILENTLY with the forest (deforestation channel's carbon, already
+    # booked there + in cc-history), NO edge flux; afforestation (A up) -> new edge ramps in via
+    # the pipeline. FALSE recovers the legacy level-pipeline. NOT yet GDX-verified: keep FALSE
+    # until the HPC checks in EDGE_AREA_SPLIT.md pass, then make it the default.
+    edgeAreaSplit <- FALSE
 
-    rInit <- 1 - (edgeTau / edgeTHist) * (1 - exp(-edgeTHist / edgeTau))
+    # forest-area basis for the ratio A(t)/A(t-1) (only the ratio is used). primforest+secdforest
+    # dominate the carbon in L; youngsecdf (<20 tC/ha) omitted as second-order.
+    forestArea <- NULL
+    if (edgeAreaSplit) {
+      forestArea <- dimSums(land(gdx, level = "cell")[, , c("primforest", "secdforest")], dim = 3)
+      forestArea <- forestArea[, getYears(edgeCarbonLoss), ]
+    }
+
+    # --- Compute pipeline: realized loss tracks equilibrium with exponential lag ---
+    # realized(t) = realizedAfterArea + alpha*(equil - realizedAfterArea), alpha = 1 - exp(-dt/tau)
+    # At t=1: realized = equilibrium * rInit
+    realizedLoss <- edgeCarbonLoss * 0
+    pipelineFlow <- edgeCarbonLoss * 0   # REPORTED edge flux (intensity+density; excludes area exit)
+    areaExitLoss <- edgeCarbonLoss * 0   # committed edge loss leaving via deforestation (diagnostic)
+
     realizedLoss[, 1, ] <- edgeCarbonLoss[, 1, ] * rInit
     pipelineFlow[, 1, ] <- 0  # historical emissions already occurred before 1995
 
@@ -663,20 +689,37 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
       alpha <- 1 - exp(-dt / edgeTau)
       prevRealized <- setYears(realizedLoss[, i - 1, ], NULL)
       equil <- edgeCarbonLoss[, i, ]
-      realizedLoss[, i, ] <- prevRealized + alpha * (equil - prevRealized)
-      pipelineFlow[, i, ] <- realizedLoss[, i, ] - setYears(realizedLoss[, i - 1, ], NULL)
+
+      realizedAfterArea <- prevRealized
+      if (edgeAreaSplit) {
+        aPrev <- setYears(forestArea[, i - 1, ], NULL)
+        aCur  <- setYears(forestArea[, i, ], NULL)
+        ratio <- aCur / aPrev
+        ratio[!is.finite(ratio)] <- 1    # aPrev ~ 0: no prior forest -> no exit
+        ratio[ratio > 1]         <- 1    # afforestation: ramp via pipeline, not a silent exit
+        realizedAfterArea   <- prevRealized * ratio                # cleared fraction leaves silently
+        areaExitLoss[, i, ] <- prevRealized - realizedAfterArea    # >= 0 -> deforestation channel
+      }
+
+      realizedLoss[, i, ] <- realizedAfterArea + alpha * (equil - realizedAfterArea)
+      pipelineFlow[, i, ] <- realizedLoss[, i, ] - realizedAfterArea   # edge dynamics only
     }
 
     # Aggregate to reporting level
     edgeCarbonLoss <- superAggregateX(edgeCarbonLoss, aggr_type = "sum", level = level)
     realizedLoss   <- superAggregateX(realizedLoss, aggr_type = "sum", level = level)
     pipelineFlow   <- superAggregateX(pipelineFlow, aggr_type = "sum", level = level)
+    areaExitLoss   <- superAggregateX(areaExitLoss, aggr_type = "sum", level = level)
 
     # Convert Mio tC -> Mt CO2
     edgeCarbonStock <- edgeCarbonLoss * 44 / 12
 
     # Pipeline flow -> Mt CO2/yr
     edgeCarbonFlow <- pipelineFlow * 44 / 12 / timestepLength
+
+    # Area-driven edge loss routed to the deforestation channel (diagnostic; Mt CO2/yr).
+    # Zero unless edgeAreaSplit is TRUE. Makes the split auditable (conservation check).
+    edgeAreaExit <- areaExitLoss * 44 / 12 / timestepLength
 
     # Also compute instant flow for comparison reporting
     edgeInstantFlow <- edgeCarbonStock
@@ -690,10 +733,12 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
     edgeCarbonStock <- collapseNames(edgeCarbonStock)
     edgeInstantFlow <- collapseNames(edgeInstantFlow)
     realizedStock   <- collapseNames(realizedLoss * 44 / 12)
+    edgeAreaExit    <- collapseNames(edgeAreaExit)
 
     # y1995 = initial period, no meaningful flow (matches other forest parameters)
     edgeCarbonFlow[, 1, ]  <- NA
     edgeInstantFlow[, 1, ] <- NA
+    edgeAreaExit[, 1, ]    <- NA
 
     # Degradation total = shifting cultivation + edge degradation (pipeline)
     shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
@@ -711,6 +756,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE) {
       setNames(edgeCarbonFlow,   "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
       setNames(edgeCarbonStock,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Equilibrium stock (Mt CO2)"),
       setNames(realizedStock,    "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Realized stock (Mt CO2)"),
+      setNames(edgeAreaExit,     "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Area exit (Mt CO2/yr)"),
       setNames(edgeInstantFlow,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Instant flow (Mt CO2/yr)")
     )
     emissionsReport <- mbind(emissionsReport, reportVars)

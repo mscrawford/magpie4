@@ -129,7 +129,7 @@
 #' @md
 #'
 reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
-                            landCarbonSinkType = "grassi", edgeAreaSplit = TRUE) {
+                            landCarbonSinkType = "internal", edgeAreaSplit = TRUE) {
   # -----------------------------------------------------------------------------------------------------------------
   # Helper: expand a magpie object to match target years, filling missing years with 0
   .harmonizeYears <- function(x, targetYears) {

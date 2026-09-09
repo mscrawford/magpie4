@@ -763,6 +763,8 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     areaExitLoss      <- superAggregateX(areaExitLoss, aggr_type = "sum", level = level)
     ccEdgeInstantLoss <- superAggregateX(ccEdgeInstantLoss, aggr_type = "sum", level = level)
     forestryFlow      <- superAggregateX(forestryFlow, aggr_type = "sum", level = level)
+    noLagNatural      <- superAggregateX(noLagNatural, aggr_type = "sum", level = level)
+    noLagForestry     <- superAggregateX(noLagForestry, aggr_type = "sum", level = level)
 
     # Convert Mio tC -> Mt CO2
     edgeCarbonStock <- edgeCarbonLoss * 44 / 12

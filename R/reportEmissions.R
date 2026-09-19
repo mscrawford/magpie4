@@ -84,7 +84,7 @@
 #' Emissions\|CO2\|Land\|Cumulative\|+\|Indirect | Gt CO2 | Cumulative carbon sink on managed land from environmental change
 #' Emissions\|CO2\|Land\|Cumulative\|+\|Land-use Change | Gt CO2 | Cumulative net CO2 flux from land-use change, harvest and regrowth
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Deforestation | Gt CO2 | Cumulative CO2 emissions from deforestation and degradation (shifting cultivation and, since model version L4, edge degradation)
-#' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|Deforestation\|Edge degradation | Gt CO2 | Cumulative edge emission (committed-stock accounting); contained in the cumulative Deforestation line above
+#' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|Deforestation\|+\|Edge degradation | Gt CO2 | Cumulative edge emission (committed-stock accounting), a + child of the cumulative Deforestation line
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Regrowth | Gt CO2 | Cumulative CO2 removals from regrowth
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Other land conversion | Gt CO2 | Cumulative CO2 emissions from other land conversion
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Peatland | Gt CO2 | Cumulative net CO2 flux from peatland
@@ -665,8 +665,19 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
   # without the exports (model versions L0-L3) get no edge lines: they are the record, not the canonical.
 
   edgeCommitted35 <- readGDX(gdx, "p35_degr_committed", react = "silent")   # Mio tC; (j, t, land_timber.ac.degr35)
-  edgeCumE <- NULL                                                            # cumulative E (Gt CO2) for the cumulative tree
-  if (!is.null(edgeCommitted35) && any(edgeCommitted35 != 0)) {
+  edgeCumE <- NULL; edgeCumEAG <- NULL       # cumulative E and its aboveground part (Gt CO2) for the cumulative tree
+  # full = exports present with values; zero = an L4 gdx with the edge switched off (symbols present, all zero: report
+  # honest zeros so every arm of a suite carries the same variable set); none = a pre-L4 gdx
+  edgeMode <- if (is.null(edgeCommitted35)) "none" else if (any(edgeCommitted35 != 0, na.rm = TRUE)) "full" else "zero"
+  if (edgeMode == "full" && length(getNames(edgeCommitted35, dim = 3)) > 1) {
+    # several multiplicative drivers: the afforestation-pool deficit (combined in 32_forestry) would have to be attributed
+    # by shares of -ln(1 - g_d) and the shared foregone-growth term split (COMMITTED_STOCK_ACCOUNTING.md 6b) - not
+    # implemented. Warn and report no edge lines rather than mis-attribute silently or abort the whole report.
+    warning("reportEmissions (edge, L4): ", length(getNames(edgeCommitted35, dim = 3)), " degradation drivers in the GDX; ",
+            "attribution across several drivers is not implemented, edge lines omitted")
+    edgeMode <- "none"
+  }
+  if (edgeMode == "full") {
     timestepLength <- m_yeardiff(gdx)
     yrs <- getYears(edgeCommitted35)
     .lvl <- function(name) {
@@ -690,17 +701,22 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     unredS  <- .par("p35_vegc_unreduced_secdforest")             # (j, t, ac)                tC/ha
     unredY  <- .par("p35_vegc_unreduced_youngsecdf")             # (j, t, ac)                tC/ha
     unred32 <- .par("p32_vegc_unreduced")                        # (j, t, type32.ac)         tC/ha
-    committed32 <- .par("p32_degr_committed", required = FALSE)  # (j, t, type32.ac) Mio tC; NULL when the haircut is off
+    committed32 <- .par("p32_degr_committed", required = FALSE)  # (j, t, type32.ac) Mio tC; always in an L4 gdx (zero when the haircut is off)
 
-    # Drivers (degr35). The report loops over them; with several multiplicative drivers the afforestation-pool
-    # deficit (combined in 32_forestry) would have to be attributed by shares of -ln(1 - g_d) and the shared
-    # foregone-growth term split - not implemented, refuse rather than mis-attribute silently.
+    # Drivers (degr35): one today; the report loops over them (several are refused above)
     drivers <- getNames(edgeCommitted35, dim = 3)
-    if (length(drivers) > 1) {
-      stop("reportEmissions (edge, L4): ", length(drivers), " degradation drivers in the GDX (", paste(drivers, collapse = ", "),
-           "); attribution across several drivers is not implemented (COMMITTED_STOCK_ACCOUNTING.md section 6b)")
-    }
     driverLabel <- c(edge = "Edge degradation")
+    # Above/below-ground split of E for the Indirect ++ decomposition: with s35_edge_agb_only = 1 the deficit is
+    # aboveground by construction in every pool (the 32 pools take the secdforest factor); with 0 it is on total vegc and
+    # splits by the pool's aboveground share, as emisCO2 splits each pool's vegc.
+    agbOnly <- readGDX(gdx, "s35_edge_agb_only", react = "silent")
+    agFrac  <- readGDX(gdx, "fm_aboveground_fraction", react = "silent")
+    poolType <- c(primforest = "primforest", secdforest = "secdforest", youngsecdf = "other", forestry_ndc = "forestry", forestry_aff = "forestry")
+    agWeight <- function(p) {
+      if ((!is.null(agbOnly) && as.numeric(agbOnly) == 1) || is.null(agFrac)) return(1)
+      as.numeric(agFrac[, , poolType[[p]]])
+    }
+    edgeEAG <- NULL
 
     edgeLines <- NULL
     edgeE <- NULL
@@ -731,6 +747,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       }
       terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", T = "T"),
                       function(k) Reduce(`+`, lapply(pools, `[[`, k)))
+      termsEAG <- Reduce(`+`, lapply(names(pools), function(p) pools[[p]]$E * agWeight(p)))
 
       # Aggregate (all terms are extensive), convert Mio tC -> Mt CO2, flows per year
       .agg <- function(x) collapseNames(superAggregateX(x, aggr_type = "sum", level = level))
@@ -739,7 +756,8 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       F <- .agg(terms$F) * 44 / 12 / timestepLength
       G <- .agg(terms$G) * 44 / 12 / timestepLength
       T <- .agg(terms$T) * 44 / 12 / timestepLength
-      E[, 1, ] <- NA; F[, 1, ] <- NA; G[, 1, ] <- NA; T[, 1, ] <- NA   # the first step is a state, not a flow
+      EAG <- .agg(termsEAG) * 44 / 12 / timestepLength
+      E[, 1, ] <- NA; F[, 1, ] <- NA; G[, 1, ] <- NA; T[, 1, ] <- NA; EAG[, 1, ] <- NA   # the first step is a state, not a flow
 
       lab <- if (d %in% names(driverLabel)) driverLabel[[d]] else paste0(d, " degradation")
       # nolint start: line_length_linter
@@ -751,11 +769,14 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
         setNames(T, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Area transfer (Mt CO2/yr)")))
       # nolint end
       edgeE <- if (is.null(edgeE)) E else edgeE + E
+      edgeEAG <- if (is.null(edgeEAG)) EAG else edgeEAG + EAG
     }
 
     # Re-attribution inside the model's own total. edgeE0 carries 0 in the first step so the totals keep their value.
     edgeE0 <- edgeE
     edgeE0[is.na(edgeE0)] <- 0
+    edgeEAG0 <- edgeEAG
+    edgeEAG0[is.na(edgeEAG0)] <- 0
     shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
     degradTotal  <- collapseNames(shiftingCult + edgeE0)
     emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] <-
@@ -766,12 +787,22 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     } else {
       emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] <-
         emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] - edgeE0
+      # keep the Indirect ++ (above / below ground) decomposition additive: the deficit's aboveground part leaves AG
+      agName <- "Emissions|CO2|Land|Indirect|++|Above Ground Carbon (Mt CO2/yr)"
+      bgName <- "Emissions|CO2|Land|Indirect|++|Below Ground Carbon (Mt CO2/yr)"
+      if (all(c(agName, bgName) %in% getNames(emissionsReport))) {
+        emissionsReport[, , agName] <- emissionsReport[, , agName] - edgeEAG0
+        emissionsReport[, , bgName] <- emissionsReport[, , bgName] - (edgeE0 - edgeEAG0)
+      }
     }
 
     # Cumulative E (Gt CO2), same construction as .calcCO2's cumulative branch; applied to the cumulative tree below
     edgeCumE <- edgeE0 * timestepLength[, getYears(edgeE0), ]
     edgeCumE <- as.magpie(apply(edgeCumE, c(1, 3), cumsum))
     edgeCumE <- (edgeCumE - setYears(edgeCumE[, 1, ], NULL)) / 1000
+    edgeCumEAG <- edgeEAG0 * timestepLength[, getYears(edgeEAG0), ]
+    edgeCumEAG <- as.magpie(apply(edgeCumEAG, c(1, 3), cumsum))
+    edgeCumEAG <- (edgeCumEAG - setYears(edgeCumEAG[, 1, ], NULL)) / 1000
 
     # nolint start: line_length_linter
     emissionsReport <- mbind(emissionsReport,
@@ -793,8 +824,21 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       warning("CO2 land-use change sub-categories do not add up to total after the edge re-attribution")
     }
     # nolint end
+  } else if (edgeMode == "zero") {
+    # nolint start: line_length_linter
+    sc <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
+    z <- collapseNames(sc * 0); zf <- z; zf[, 1, ] <- NA
+    emissionsReport <- mbind(emissionsReport,
+      setNames(collapseNames(sc), "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
+      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
+      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Fragmentation-driven (Mt CO2/yr)"),
+      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Foregone growth (Mt CO2/yr)"),
+      setNames(z,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Committed stock (Mt CO2)"),
+      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Area transfer (Mt CO2/yr)"))
+    edgeCumE <- z / 1000; edgeCumEAG <- z / 1000
+    # nolint end
   } else {
-    # No committed-stock exports (edge off, or a pre-L4 GDX): degradation total = shifting cultivation only
+    # No committed-stock exports (a pre-L4 GDX): degradation total = shifting cultivation only
     emissionsReport <- mbind(
       emissionsReport,
       setNames(
@@ -999,9 +1043,16 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     } else {
       emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Indirect (Gt CO2)"] <-
         emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Indirect (Gt CO2)"] - edgeCumE
+      agName <- "Emissions|CO2|Land|Cumulative|Indirect|++|Above Ground Carbon (Gt CO2)"
+      bgName <- "Emissions|CO2|Land|Cumulative|Indirect|++|Below Ground Carbon (Gt CO2)"
+      if (all(c(agName, bgName) %in% getNames(emissionsReport))) {
+        emissionsReport[, , agName] <- emissionsReport[, , agName] - edgeCumEAG
+        emissionsReport[, , bgName] <- emissionsReport[, , bgName] - (edgeCumE - edgeCumEAG)
+      }
     }
+    # a + child of the cumulative Deforestation node (which already lumps shifting cultivation), so the node stays additive
     emissionsReport <- mbind(emissionsReport,
-      setNames(edgeCumE, "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Edge degradation (Gt CO2)"))
+      setNames(edgeCumE, "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|+|Edge degradation (Gt CO2)"))
   }
 
   checkEmis <- emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] -

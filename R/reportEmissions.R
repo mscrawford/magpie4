@@ -7,6 +7,10 @@
 #' @param level An aggregation level for the spatial dimension. Can be any level
 #' available via superAggregateX.
 #' @param storageWood Accounting for long term carbon storage in wood products. Default is TRUE.
+#' @param landCarbonSinkType "internal" (default): the Indirect flux is the model's own density-change (cc)
+#' channel; "grassi": the Grassi et al. 2021 managed-land proxy replaces it. The forest edge emission
+#' (committed-stock accounting, see the Edge degradation lines) is a re-attribution from Indirect into
+#' Land-use Change under "internal" and an addition to Land-use Change and net Land under "grassi".
 #' @return GHG emissions as MAgPIE object (Unit: Mt CO2/yr, Mt N2O/yr, and Mt CH4/yr, for cumulative emissions Gt CO2)
 #' @author Florian Humpenoeder, Benjamin Leon Bodirsky, Michael Crawford
 #' @examples
@@ -25,17 +29,15 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Secondary forests | Mt CO2/yr | CO2 emissions from deforestation of secondary forests
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Forestry plantations | Mt CO2/yr | CO2 emissions from deforestation of forestry plantations
 #' Emissions\|CO2\|Land\|Land-use Change\|Deforestation\|+\|Cropland Tree Cover | Mt CO2/yr | CO2 emissions from removal of trees on cropland
-#' Emissions\|CO2\|Land\|Land-use Change\|+\|Forest degradation | Mt CO2/yr | CO2 emissions from forest degradation (shifting cultivation + edge effects)
+#' Emissions\|CO2\|Land\|Land-use Change\|+\|Forest degradation | Mt CO2/yr | CO2 emissions from forest degradation (shifting cultivation + edge degradation)
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Shifting cultivation | Mt CO2/yr | CO2 emissions from shifting cultivation
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Shifting cultivation\|+\|Primary forests | Mt CO2/yr | CO2 emissions from shifting cultivation in primary forests
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Shifting cultivation\|+\|Secondary forests | Mt CO2/yr | CO2 emissions from shifting cultivation in secondary forests
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Edge degradation | Mt CO2/yr | CO2 emissions from forest edge carbon degradation (pipeline: tau=13yr)
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Equilibrium stock | Mt CO2 | Equilibrium vegetation carbon removed by edge effects (stock)
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Realized stock | Mt CO2 | Realized (temporally-lagged) edge carbon loss
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Instant flow | Mt CO2/yr | Instantaneous edge emission flow (for comparison)
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|No lag | Mt CO2/yr | Committed edge loss booked in the step it arises (overlay with alpha = 1: L_t - min(A_t/A_t-1, 1) L_t-1); reported alongside the lagged line, not added to totals
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|No lag\|Natural pools | Mt CO2/yr | No-lag line, natural pools
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|No lag\|Afforestation pools | Mt CO2/yr | No-lag line, ndc/aff pools
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Edge degradation | Mt CO2/yr | Edge emission on standing natural forest: the change of the committed edge carbon deficit on the forest standing at the end of the step (committed-stock accounting, model version L4); under landCarbonSinkType = "internal" re-attributed from Indirect into Land-use Change, so net Land is the model's own total
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Fragmentation-driven | Mt CO2/yr | Part of the edge emission from the applied deficit fraction changing (the edge fraction)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Foregone growth | Mt CO2/yr | Part of the edge emission from the unreduced reference density changing (growth and ageing that the deficit fraction removes)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Committed stock | Mt CO2 | Committed edge carbon deficit on the solved natural forest (primforest, secdforest, youngsecdf and the natural-curve ndc/aff afforestation pools); a stock, not a flow
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer | Mt CO2/yr | Diagnostic: deficit arriving or leaving with area change; that carbon is booked in land-use change at reduced density, so this is not an emission line. Edge degradation + Area transfer = change of the committed stock
 #' Emissions\|CO2\|Land\|Land-use Change\|+\|Other land conversion | Mt CO2/yr | CO2 emissions from conversion of other natural land
 #' Emissions\|CO2\|Land\|Land-use Change\|+\|Regrowth | Mt CO2/yr | CO2 removals from forest regrowth (negative values)
 #' Emissions\|CO2\|Land\|Land-use Change\|Regrowth\|+\|CO2-price AR | Mt CO2/yr | CO2 removals from afforestation/reforestation driven by CO2 price
@@ -81,7 +83,8 @@
 #' Emissions\|CO2\|Land\|Cumulative | Gt CO2 | Cumulative net CO2 flux from land use and land management, including environmental effects on managed land
 #' Emissions\|CO2\|Land\|Cumulative\|+\|Indirect | Gt CO2 | Cumulative carbon sink on managed land from environmental change
 #' Emissions\|CO2\|Land\|Cumulative\|+\|Land-use Change | Gt CO2 | Cumulative net CO2 flux from land-use change, harvest and regrowth
-#' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Deforestation | Gt CO2 | Cumulative CO2 emissions from deforestation and degradation
+#' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Deforestation | Gt CO2 | Cumulative CO2 emissions from deforestation and degradation (shifting cultivation and, since model version L4, edge degradation)
+#' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|Deforestation\|Edge degradation | Gt CO2 | Cumulative edge emission (committed-stock accounting); contained in the cumulative Deforestation line above
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Regrowth | Gt CO2 | Cumulative CO2 removals from regrowth
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Other land conversion | Gt CO2 | Cumulative CO2 emissions from other land conversion
 #' Emissions\|CO2\|Land\|Cumulative\|Land-use Change\|+\|Peatland | Gt CO2 | Cumulative net CO2 flux from peatland
@@ -132,7 +135,7 @@
 #' @md
 #'
 reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
-                            landCarbonSinkType = "internal", edgeAreaSplit = TRUE) {
+                            landCarbonSinkType = "internal") {
   # -----------------------------------------------------------------------------------------------------------------
   # Helper: expand a magpie object to match target years, filling missing years with 0
   .harmonizeYears <- function(x, targetYears) {
@@ -634,224 +637,164 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
   # nolint end
 
   # -----------------------------------------------------------------------------------------------------------------
-  # Edge carbon degradation — integrated into LUC emissions
-  # p35_edge_carbon_loss(t,j) = equilibrium vegC removed by edge effects (Mio tC)
-  # The temporal pipeline (Option B: symmetric realized-loss with tau) is computed
-  # here in R rather than in GAMS, allowing post-hoc comparison of instant vs pipeline
-  # reporting without re-running GAMS.
+  # Forest degradation by edge effects: COMMITTED-STOCK ACCOUNTING (model version L4, 2026-09).
+  #
+  # The model carries the edge effect in its own stock: 35_natveg multiplies the natural-forest vegc densities by a
+  # retention factor (1 - g) before the solve, 32_forestry does the same for the natural-curve afforestation pools,
+  # so every carbon flow the model books already contains the edge effect, once and instantly. The committed edge
+  # carbon stock (the deficit) on the SOLVED land, D = sum_p g_p rho_p A_p, is exported by GAMS at postsolve per
+  # pool, age class and driver (p35_degr_committed, p32_degr_committed) together with the unreduced densities.
+  # Per pool p (age classes summed inside the pool), cluster and step (.edgeCommittedStockTerms):
+  #   dd_p,t  = D_p,t / A_p,t                          deficit density (tC/ha)
+  #   rho_p,t = (sum_ac rho_ac A_ac) / A_p,t            unreduced density, area-weighted (tC/ha)
+  #   g_p,t   = D_p,t / (rho_p,t A_p,t)                effective applied deficit fraction
+  #   S_t = D_t                                         COMMITTED STOCK
+  #   E_t = sum_p (dd_p,t - dd_p,t-1) A_p,t             EDGE EMISSION on standing forest (headline)
+  #   F_t = sum_p (g_p,t - g_p,t-1) rho_p,t A_p,t       of which FRAGMENTATION-DRIVEN (the deficit fraction changing)
+  #   G_t = sum_p g_p,t-1 (rho_p,t - rho_p,t-1) A_p,t   of which FOREGONE GROWTH (the reference density changing)
+  #   T_t = sum_p dd_p,t-1 (A_p,t - A_p,t-1)            AREA TRANSFER (diagnostic; that carbon sits in land-use change)
+  # Identities: F + G = E and E + T = D_t - D_t-1, exactly. Both terms of E sit on the same land A_p,t: no basis
+  # mismatch, no ratio, no clamp, no exit. E is a RE-ATTRIBUTION inside the model's own total: under
+  # landCarbonSinkType = "internal" it moves from the density-change channel (Indirect) into Land-use Change |
+  # Forest degradation, so net Land is the model's own total and the + tree stays additive; nothing is added or
+  # subtracted. Under "grassi" the model's density channel is replaced by external data, so E is added to Land-use
+  # Change and to net Land (as the retired overlay did). T is not an emission line. Spec, identities, acceptance
+  # tests: fragmentation repo, 05-temporal-accounting/documents/COMMITTED_STOCK_ACCOUNTING.md.
+  # The former lagged overlay (tau = 13, rInit, edgeAreaSplit, the cc-instant subtraction, the realized and
+  # equilibrium stocks, the no-lag lines) is RETIRED (decision 2026-09-08); do not re-introduce it. GDX files
+  # without the exports (model versions L0-L3) get no edge lines: they are the record, not the canonical.
 
-  edgeCarbonLoss <- readGDX(gdx, "p35_edge_carbon_loss", react = "silent")
-  if (!is.null(edgeCarbonLoss)) {
-    # --- Temporal pipeline parameters ---
-    # tau: e-folding time for edge degradation (yr), from Brinck et al. 2017
-    edgeTau <- 13
-    # rInit: fraction of the equilibrium edge deficit already realized at the 1995 start;
-    # (1 - rInit) is the pre-1995 "pipeline backlog" that the recursion releases over
-    # 2000-2050. Set to 1: the 1995 backlog is structurally ~empty - forests sit near the
-    # edge-maximizing fraction p* where edge-affected area is insensitive to historical
-    # forest loss (robust to FAO 2x / gross 3.3x; see audit/edge_thist_replacement/
-    # RINIT_INVESTIGATION.md). The former 0.6965 came from T_hist=41yr back-calibrated to
-    # Brinck's 0.34 GtC/yr legacy flux; that calibration is removed.
-    #   legacy: edgeTHist <- 41; rInit <- 1 - (edgeTau/edgeTHist)*(1 - exp(-edgeTHist/edgeTau))
-    rInit <- 1
-
+  edgeCommitted35 <- readGDX(gdx, "p35_degr_committed", react = "silent")   # Mio tC; (j, t, land_timber.ac.degr35)
+  edgeCumE <- NULL                                                            # cumulative E (Gt CO2) for the cumulative tree
+  if (!is.null(edgeCommitted35) && any(edgeCommitted35 != 0)) {
     timestepLength <- m_yeardiff(gdx)
-    years <- getYears(edgeCarbonLoss, as.integer = TRUE)
-
-    # --- edgeAreaSplit: route AREA-driven changes in the edge deficit to the deforestation
-    # channel instead of the edge flux. p35_edge_carbon_loss L = ell*A moves with forest AREA as
-    # well as edge intensity/density; piping the level L makes deforestation of an edged cell show
-    # up as spurious NEGATIVE edge flux (apparent recovery) and erases the real historical edge
-    # emission on cells later cleared. Asymmetric fix (audit/edge_thist_replacement/
-    # EDGE_AREA_SPLIT.md): deforestation (A down) -> the committed (realized) edge loss on the
-    # cleared fraction leaves SILENTLY with the forest (deforestation channel's carbon, already
-    # booked there + in cc-history), NO edge flux; afforestation (A up) -> new edge ramps in via
-    # the pipeline. FALSE recovers the legacy level-pipeline (the regression gate).
-    # edgeAreaSplit is now a function argument (default TRUE); GDX-verified on HPC
-    # 2026-06-20 via audit/edge_thist_replacement/cc_edge_verify.R.
-
-    # forest-area basis for the ratio A(t)/A(t-1) (only the ratio is used). primforest+secdforest
-    # dominate the carbon in L; youngsecdf (<20 tC/ha) omitted as second-order.
-    # forestArea is needed for the area-split (overlay) AND for the cc edge term the
-    # internal land-carbon-sink subtracts, so compute it whenever either applies.
-    forestArea <- NULL
-    if (edgeAreaSplit || landCarbonSinkType != "grassi") {
-      forestArea <- dimSums(land(gdx, level = "cell")[, , c("primforest", "secdforest")], dim = 3)
-      forestArea <- forestArea[, getYears(edgeCarbonLoss), ]
+    yrs <- getYears(edgeCommitted35)
+    .lvl <- function(name) {
+      x <- readGDX(gdx, name, select = list(type = "level"), react = "silent")
+      if (is.null(x)) stop("reportEmissions (edge, L4): ", name, " is missing from the GDX")
+      x[, yrs, ]
     }
-
-    # --- Two components since the 2026-08-21 forestry haircut split (fork ed7a8cd19): the natural
-    # pools (primforest, secdforest, youngsecdf; area basis primforest + secdforest) and the
-    # natural-curve afforestation pools (ndc, and aff when s32_aff_plantation = 0; area basis =
-    # their own ov32_land). p35_edge_carbon_loss is the SUM; pm_edge_carbon_loss_forestry carries the
-    # afforestation-pool part (absent in pre-split GDXs, zero when s32_edge_haircut = 0). Each
-    # component runs the same lagged overlay on its own area, so the area split and the cc-edge
-    # subtraction use the right forest for the right carbon (2026-08-28).
-    edgeLossForestry <- readGDX(gdx, "pm_edge_carbon_loss_forestry", react = "silent")
-    affArea <- NULL
-    if (!is.null(edgeLossForestry) && any(edgeLossForestry != 0)) {
-      edgeLossForestry <- edgeLossForestry[, getYears(edgeCarbonLoss), ]
-      affPlant <- readGDX(gdx, "s32_aff_plantation", react = "silent")
-      affPools <- if (!is.null(affPlant) && as.numeric(affPlant) == 1) "ndc" else c("ndc", "aff")
-      l32 <- readGDX(gdx, "ov32_land", select = list(type = "level"), react = "silent")
-      affArea <- dimSums(l32[, getYears(edgeCarbonLoss), affPools], dim = 3)
-    } else {
-      edgeLossForestry <- edgeCarbonLoss * 0
+    .par <- function(name, required = TRUE) {
+      x <- readGDX(gdx, name, react = "silent")
+      if (is.null(x)) {
+        if (required) stop("reportEmissions (edge, L4): ", name, " is missing from the GDX")
+        return(NULL)
+      }
+      x[, yrs, ]
     }
-    edgeLossNatural <- edgeCarbonLoss - edgeLossForestry
+    landL   <- .lvl("ov_land")                                   # (j, t, land)              Mha
+    secdL   <- .lvl("ov35_secdforest")                           # (j, t, ac)                Mha
+    otherL  <- .lvl("ov_land_other")                             # (j, t, othertype35.ac)    Mha
+    for32L  <- .lvl("ov32_land")                                 # (j, t, type32.ac)         Mha
+    unredP  <- .par("p35_vegc_unreduced_primforest")             # (j, t)                    tC/ha
+    unredS  <- .par("p35_vegc_unreduced_secdforest")             # (j, t, ac)                tC/ha
+    unredY  <- .par("p35_vegc_unreduced_youngsecdf")             # (j, t, ac)                tC/ha
+    unred32 <- .par("p32_vegc_unreduced")                        # (j, t, type32.ac)         tC/ha
+    committed32 <- .par("p32_degr_committed", required = FALSE)  # (j, t, type32.ac) Mio tC; NULL when the haircut is off
 
-    # --- Compute pipeline: realized loss tracks equilibrium with exponential lag ---
-    # realized(t) = realizedAfterArea + alpha*(equil - realizedAfterArea), alpha = 1 - exp(-dt/tau)
-    # At t=1: realized = equilibrium * rInit
-    # cc edge term (intensity-only INSTANTANEOUS equilibrium flux). The optimizer applies
-    # the full equilibrium edge density reduction every period, so emisCO2's emisCC channel
-    # books area*d(edgeReduction). Per cell that equals  L[t] - (A[t]/A[t-1]) L[t-1]  (the
-    # area term removed; UNCLAMPED ratio, to match emisCC = area[t]*d(density) exactly). This
-    # is what the internal land-carbon-sink subtracts so edge is not double counted against
-    # the lagged overlay. Stays 0 when the area is unavailable (grassi + edgeAreaSplit=F).
-    edgeOverlay <- function(equil, area) {
-      realized <- equil * 0; flow <- equil * 0; exitl <- equil * 0; ccInst <- equil * 0; nolag <- equil * 0
-      realized[, 1, ] <- equil[, 1, ] * rInit
-      flow[, 1, ] <- 0  # historical emissions already occurred before 1995
-      for (i in seq_along(years)[-1]) {
-        dt <- as.numeric(timestepLength[, i, ])
-        alpha <- 1 - exp(-dt / edgeTau)
-        prevRealized <- setYears(realized[, i - 1, ], NULL)
-        eq <- equil[, i, ]
-        realizedAfterArea <- prevRealized
-        ratioNoLag <- 1                                          # clamped area ratio for the no-lag line
-        if (edgeAreaSplit && !is.null(area)) {
-          aPrev <- setYears(area[, i - 1, ], NULL)
-          aCur  <- setYears(area[, i, ], NULL)
-          ratio <- aCur / aPrev
-          ratio[!is.finite(ratio)] <- 1    # aPrev ~ 0: no prior forest -> no exit
-          ratio[ratio > 1]         <- 1    # afforestation: ramp via pipeline, not a silent exit
-          ratioNoLag <- ratio
-          realizedAfterArea <- prevRealized * ratio             # cleared fraction leaves silently
-          exitl[, i, ] <- prevRealized - realizedAfterArea      # >= 0 -> deforestation channel
-        }
-        realized[, i, ] <- realizedAfterArea + alpha * (eq - realizedAfterArea)
-        flow[, i, ] <- realized[, i, ] - realizedAfterArea      # edge dynamics only
-        # No-lag line (2026-08-30, Mike): the same overlay with alpha = 1, i.e. the committed loss booked
-        # in the step it arises: L_t - min(A_t/A_t-1, 1) L_t-1 (the area exit still leaves via deforestation).
-        # For natural pools with A_t <= A_t-1 this equals ccInst; for an expanding pool it keeps the growth
-        # of the deficit that the model books as reduced regrowth (lu) - the term the lagged line double
-        # counts under a carbon price (D6, X6).
-        nolag[, i, ] <- setYears(eq, NULL) - ratioNoLag * setYears(equil[, i - 1, ], NULL)
-        if (!is.null(area)) {
-          ratioCC <- setYears(area[, i, ], NULL) / setYears(area[, i - 1, ], NULL)
-          ratioCC[!is.finite(ratioCC)] <- 1                   # A(t-1) ~ 0: no prior forest
-          ccInst[, i, ] <- setYears(eq, NULL) - ratioCC * setYears(equil[, i - 1, ], NULL)
+    # Drivers (degr35). The report loops over them; with several multiplicative drivers the afforestation-pool
+    # deficit (combined in 32_forestry) would have to be attributed by shares of -ln(1 - g_d) and the shared
+    # foregone-growth term split - not implemented, refuse rather than mis-attribute silently.
+    drivers <- getNames(edgeCommitted35, dim = 3)
+    if (length(drivers) > 1) {
+      stop("reportEmissions (edge, L4): ", length(drivers), " degradation drivers in the GDX (", paste(drivers, collapse = ", "),
+           "); attribution across several drivers is not implemented (COMMITTED_STOCK_ACCOUNTING.md section 6b)")
+    }
+    driverLabel <- c(edge = "Edge degradation")
+
+    edgeLines <- NULL
+    edgeE <- NULL
+    for (d in drivers) {
+      Dd <- edgeCommitted35[, , d]
+      # Per pool: deficit stock D (Mio tC), solved area A (Mha), unreduced carbon C0 (Mio tC), age classes summed.
+      # "other" in the export is youngsecdf (othernat is never reduced); primforest sits in age class acx.
+      pools <- list(
+        primforest = .edgeCommittedStockTerms(
+          D  = dimSums(Dd[, , "primforest"], dim = 3),
+          A  = collapseNames(landL[, , "primforest"]),
+          C0 = collapseNames(unredP * landL[, , "primforest"])),
+        secdforest = .edgeCommittedStockTerms(
+          D  = dimSums(Dd[, , "secdforest"], dim = 3),
+          A  = dimSums(secdL, dim = 3),
+          C0 = dimSums(unredS * secdL, dim = 3)),
+        youngsecdf = .edgeCommittedStockTerms(
+          D  = dimSums(Dd[, , "other"], dim = 3),
+          A  = dimSums(otherL[, , "youngsecdf"], dim = 3),
+          C0 = dimSums(unredY * collapseNames(otherL[, , "youngsecdf"]), dim = 3)))
+      if (!is.null(committed32)) {
+        for (p in intersect(c("ndc", "aff"), getNames(committed32, dim = 1))) {
+          pools[[paste0("forestry_", p)]] <- .edgeCommittedStockTerms(
+            D  = dimSums(committed32[, , p], dim = 3),
+            A  = dimSums(for32L[, , p], dim = 3),
+            C0 = dimSums(collapseNames(unred32[, , p]) * collapseNames(for32L[, , p]), dim = 3))
         }
       }
-      list(realized = realized, flow = flow, exitl = exitl, ccInst = ccInst, nolag = nolag)
-    }
-    nat <- edgeOverlay(edgeLossNatural, forestArea)
-    fst <- edgeOverlay(edgeLossForestry, affArea)
-    realizedLoss      <- nat$realized + fst$realized
-    pipelineFlow      <- nat$flow + fst$flow          # REPORTED edge flux (intensity+density; excludes area exit)
-    areaExitLoss      <- nat$exitl + fst$exitl        # committed edge loss leaving via deforestation (diagnostic)
-    ccEdgeInstantLoss <- nat$ccInst + fst$ccInst
-    forestryFlow      <- fst$flow                     # afforestation-pool component of the reported flux
-    noLagNatural      <- nat$nolag                    # no-lag (alpha = 1) line, natural pools
-    noLagForestry     <- fst$nolag                    # no-lag line, afforestation pools
+      terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", T = "T"),
+                      function(k) Reduce(`+`, lapply(pools, `[[`, k)))
 
-    # Aggregate to reporting level
-    edgeCarbonLoss    <- superAggregateX(edgeCarbonLoss, aggr_type = "sum", level = level)
-    realizedLoss      <- superAggregateX(realizedLoss, aggr_type = "sum", level = level)
-    pipelineFlow      <- superAggregateX(pipelineFlow, aggr_type = "sum", level = level)
-    areaExitLoss      <- superAggregateX(areaExitLoss, aggr_type = "sum", level = level)
-    ccEdgeInstantLoss <- superAggregateX(ccEdgeInstantLoss, aggr_type = "sum", level = level)
-    forestryFlow      <- superAggregateX(forestryFlow, aggr_type = "sum", level = level)
-    noLagNatural      <- superAggregateX(noLagNatural, aggr_type = "sum", level = level)
-    noLagForestry     <- superAggregateX(noLagForestry, aggr_type = "sum", level = level)
+      # Aggregate (all terms are extensive), convert Mio tC -> Mt CO2, flows per year
+      .agg <- function(x) collapseNames(superAggregateX(x, aggr_type = "sum", level = level))
+      S <- .agg(terms$S) * 44 / 12
+      E <- .agg(terms$E) * 44 / 12 / timestepLength
+      F <- .agg(terms$F) * 44 / 12 / timestepLength
+      G <- .agg(terms$G) * 44 / 12 / timestepLength
+      T <- .agg(terms$T) * 44 / 12 / timestepLength
+      E[, 1, ] <- NA; F[, 1, ] <- NA; G[, 1, ] <- NA; T[, 1, ] <- NA   # the first step is a state, not a flow
 
-    # Convert Mio tC -> Mt CO2
-    edgeCarbonStock <- edgeCarbonLoss * 44 / 12
-
-    # Pipeline flow -> Mt CO2/yr
-    edgeCarbonFlow <- pipelineFlow * 44 / 12 / timestepLength
-    edgeCarbonFlowForestry <- forestryFlow * 44 / 12 / timestepLength   # afforestation-pool part
-
-    # Area-driven edge loss routed to the deforestation channel (diagnostic; Mt CO2/yr).
-    # Zero unless edgeAreaSplit is TRUE. Makes the split auditable (conservation check).
-    edgeAreaExit <- areaExitLoss * 44 / 12 / timestepLength
-
-    # Instantaneous intensity edge flux that the model cc channel books (Mt CO2/yr); used
-    # to remove the edge double count from net Land under landCarbonSink != "grassi".
-    ccEdgeInstant <- ccEdgeInstantLoss * 44 / 12 / timestepLength
-
-    # No-lag lines (Mt CO2/yr): the committed loss booked in the step it arises (alpha = 1); reported
-    # alongside the lagged line, not added to any total (the lagged line stays the one in net Land).
-    edgeNoLag         <- collapseNames((noLagNatural + noLagForestry) * 44 / 12 / timestepLength)
-    edgeNoLagNatural  <- collapseNames(noLagNatural * 44 / 12 / timestepLength)
-    edgeNoLagForestry <- collapseNames(noLagForestry * 44 / 12 / timestepLength)
-    edgeNoLag[, 1, ] <- NA; edgeNoLagNatural[, 1, ] <- NA; edgeNoLagForestry[, 1, ] <- NA
-
-    # Also compute instant flow for comparison reporting
-    edgeInstantFlow <- edgeCarbonStock
-    edgeInstantFlow[, 1, ] <- 0
-    for (i in seq_along(years)[-1]) {
-      edgeInstantFlow[, i, ] <- (edgeCarbonStock[, i, ] - edgeCarbonStock[, i - 1, ]) /
-                                  timestepLength[, i, ]
+      lab <- if (d %in% names(driverLabel)) driverLabel[[d]] else paste0(d, " degradation")
+      # nolint start: line_length_linter
+      edgeLines <- mbind(edgeLines,
+        setNames(E, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|+|", lab, " (Mt CO2/yr)")),
+        setNames(F, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Fragmentation-driven (Mt CO2/yr)")),
+        setNames(G, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Foregone growth (Mt CO2/yr)")),
+        setNames(S, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Committed stock (Mt CO2)")),
+        setNames(T, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Area transfer (Mt CO2/yr)")))
+      # nolint end
+      edgeE <- if (is.null(edgeE)) E else edgeE + E
     }
 
-    edgeCarbonFlow  <- collapseNames(edgeCarbonFlow)
-    edgeCarbonStock <- collapseNames(edgeCarbonStock)
-    edgeInstantFlow <- collapseNames(edgeInstantFlow)
-    realizedStock   <- collapseNames(realizedLoss * 44 / 12)
-    edgeAreaExit    <- collapseNames(edgeAreaExit)
-    edgeCarbonFlowForestry <- collapseNames(edgeCarbonFlowForestry)
-    ccEdgeInstant   <- collapseNames(ccEdgeInstant)
-
-    # y1995 = initial period, no meaningful flow (matches other forest parameters)
-    edgeCarbonFlow[, 1, ]  <- NA
-    edgeInstantFlow[, 1, ] <- NA
-    edgeAreaExit[, 1, ]    <- NA
-    ccEdgeInstant[, 1, ]   <- NA
-
-    # Degradation total = shifting cultivation + edge degradation (pipeline)
+    # Re-attribution inside the model's own total. edgeE0 carries 0 in the first step so the totals keep their value.
+    edgeE0 <- edgeE
+    edgeE0[is.na(edgeE0)] <- 0
     shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
-    degradTotal <- shiftingCult + edgeCarbonFlow
-
-    # Add edge flow to LUC total and overall total
+    degradTotal  <- collapseNames(shiftingCult + edgeE0)
     emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] <-
-      emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] + edgeCarbonFlow
-    emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] <-
-      emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] + edgeCarbonFlow
-
-    # Remove the edge double count under landCarbonSink != "grassi". Then eClimateChange is
-    # the model cc channel, which already carries the instantaneous edge intensity
-    # (ccEdgeInstant); the overlay above adds the lagged version. Subtract the cc copy from
-    # net Land and from the Indirect (cc) subtotal so the edge is counted ONCE (lagged, via
-    # the overlay) and the cc/LUC subtotals still sum to the total. The area part stays in
-    # the deforestation/lu channel (correct reduced-density booking). Under grassi the cc
-    # channel is overridden by the external series, so there is nothing to subtract.
-    if (landCarbonSinkType != "grassi") {
+      emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] + edgeE0
+    if (landCarbonSinkType == "grassi") {
       emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] <-
-        emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] - ccEdgeInstant
+        emissionsReport[, , "Emissions|CO2|Land (Mt CO2/yr)"] + edgeE0
+    } else {
       emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] <-
-        emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] - ccEdgeInstant
+        emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] - edgeE0
     }
+
+    # Cumulative E (Gt CO2), same construction as .calcCO2's cumulative branch; applied to the cumulative tree below
+    edgeCumE <- edgeE0 * timestepLength[, getYears(edgeE0), ]
+    edgeCumE <- as.magpie(apply(edgeCumE, c(1, 3), cumsum))
+    edgeCumE <- (edgeCumE - setYears(edgeCumE[, 1, ], NULL)) / 1000
 
     # nolint start: line_length_linter
-    reportVars <- mbind(
-      setNames(degradTotal,      "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
-      setNames(edgeCarbonFlow,   "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
-      setNames(edgeCarbonStock,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Equilibrium stock (Mt CO2)"),
-      setNames(realizedStock,    "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Realized stock (Mt CO2)"),
-      setNames(edgeAreaExit,     "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Area exit (Mt CO2/yr)"),
-      setNames(edgeInstantFlow,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Instant flow (Mt CO2/yr)"),
-      setNames(ccEdgeInstant,    "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|cc intensity instant (Mt CO2/yr)"),
-      setNames(edgeCarbonFlowForestry, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Afforestation pools (Mt CO2/yr)"),
-      setNames(edgeNoLag,         "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|No lag (Mt CO2/yr)"),
-      setNames(edgeNoLagNatural,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|No lag|Natural pools (Mt CO2/yr)"),
-      setNames(edgeNoLagForestry, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|No lag|Afforestation pools (Mt CO2/yr)")
-    )
-    emissionsReport <- mbind(emissionsReport, reportVars)
+    emissionsReport <- mbind(emissionsReport,
+      setNames(degradTotal, "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
+      edgeLines)
+
+    # The + tree must still add up after the re-attribution
+    checkDegr <- emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] -
+      dimSums(emissionsReport[, , c("Emissions|CO2|Land|Land-use Change|+|Deforestation (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Other land conversion (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Regrowth (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Peatland (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Soil (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Residual (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Timber (Mt CO2/yr)",
+                                    "Emissions|CO2|Land|Land-use Change|+|Wood Harvest (Mt CO2/yr)")], dim = 3)
+    if (any(abs(checkDegr) > 1e-03, na.rm = TRUE)) {
+      warning("CO2 land-use change sub-categories do not add up to total after the edge re-attribution")
+    }
     # nolint end
   } else {
-    # No edge effects — degradation total = shifting cultivation only
+    # No committed-stock exports (edge off, or a pre-L4 GDX): degradation total = shifting cultivation only
     emissionsReport <- mbind(
       emissionsReport,
       setNames(
@@ -1040,6 +983,25 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       setNames(emisBuildingOutflow,                     "Emissions|CO2|Land|Cumulative|Land-use Change|Timber|Release from HWP|+|Buildings (Gt CO2)")
     ))
 
+  }
+
+  # L4 edge re-attribution in the cumulative tree (see the edge block above): the cumulative edge emission moves
+  # from Indirect into Land-use Change, where the cumulative tree books degradation under Deforestation; under
+  # "grassi" it is added to Land-use Change and the cumulative net total instead. Applied BEFORE the additivity check.
+  if (!is.null(edgeCumE)) {
+    emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] <-
+      emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] + edgeCumE
+    emissionsReport[, , "Emissions|CO2|Land|Cumulative|Land-use Change|+|Deforestation (Gt CO2)"] <-
+      emissionsReport[, , "Emissions|CO2|Land|Cumulative|Land-use Change|+|Deforestation (Gt CO2)"] + edgeCumE
+    if (landCarbonSinkType == "grassi") {
+      emissionsReport[, , "Emissions|CO2|Land|Cumulative (Gt CO2)"] <-
+        emissionsReport[, , "Emissions|CO2|Land|Cumulative (Gt CO2)"] + edgeCumE
+    } else {
+      emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Indirect (Gt CO2)"] <-
+        emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Indirect (Gt CO2)"] - edgeCumE
+    }
+    emissionsReport <- mbind(emissionsReport,
+      setNames(edgeCumE, "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|Edge degradation (Gt CO2)"))
   }
 
   checkEmis <- emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] -

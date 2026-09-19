@@ -11,6 +11,10 @@
 #' channel; "grassi": the Grassi et al. 2021 managed-land proxy replaces it. The forest edge emission
 #' (committed-stock accounting, see the Edge degradation lines) is a re-attribution from Indirect into
 #' Land-use Change under "internal" and an addition to Land-use Change and net Land under "grassi".
+#' @param edgeInLUC FALSE (default): the edge emission E is a memo line under Forest degradation and every total is the
+#' model's own (the spec's literal reading; two audits, 2026-09-19, measured that E is 1.3-2.3 times the edge content of the
+#' model's density channel, so moving it would over-drain Indirect). TRUE: E is re-attributed from Indirect (Above Ground
+#' Carbon) into Land-use Change | Forest degradation as a + member, yearly and cumulative; net Land unchanged. Owner's call.
 #' @return GHG emissions as MAgPIE object (Unit: Mt CO2/yr, Mt N2O/yr, and Mt CH4/yr, for cumulative emissions Gt CO2)
 #' @author Florian Humpenoeder, Benjamin Leon Bodirsky, Michael Crawford
 #' @examples
@@ -135,7 +139,7 @@
 #' @md
 #'
 reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
-                            landCarbonSinkType = "internal") {
+                            landCarbonSinkType = "internal", edgeInLUC = FALSE) {
   # -----------------------------------------------------------------------------------------------------------------
   # Helper: expand a magpie object to match target years, filling missing years with 0
   .harmonizeYears <- function(x, targetYears) {
@@ -708,16 +712,11 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     # Drivers (degr35): one today; the report loops over them (several are refused above)
     drivers <- getNames(edgeCommitted35, dim = 3)
     driverLabel <- c(edge = "Edge degradation")
-    # Above/below-ground split of E for the Indirect ++ decomposition: with s35_edge_agb_only = 1 the deficit is
-    # aboveground by construction in every pool (the 32 pools take the secdforest factor); with 0 it is on total vegc and
-    # splits by the pool's aboveground share, as emisCO2 splits each pool's vegc.
-    agbOnly <- readGDX(gdx, "s35_edge_agb_only", react = "silent")
-    agFrac  <- readGDX(gdx, "fm_aboveground_fraction", react = "silent")
-    poolType <- c(primforest = "primforest", secdforest = "secdforest", youngsecdf = "other", forestry_ndc = "forestry", forestry_aff = "forestry")
-    agWeight <- function(p) {
-      if ((!is.null(agbOnly) && as.numeric(agbOnly) == 1) || is.null(agFrac)) return(1)
-      as.numeric(agFrac[, , poolType[[p]]])
-    }
+    # Above/below-ground split of E for the Indirect ++ decomposition: emisCO2 books vegc + litc as "Above Ground Carbon"
+    # and soilc as "Below Ground Carbon" (R/emisCO2.R, the pool mapping), and the edge deficit is applied to vegc only under
+    # BOTH settings of s35_edge_agb_only (the switch scales the vegc haircut, it does not move carbon between report pools).
+    # So all of E is above ground on that basis; a shoot/root split would have to be built in emisCO2 first. (Audit 2026-09-19.)
+    agWeight <- function(p) 1
     edgeEAG <- NULL
 
     edgeLines <- NULL
@@ -762,9 +761,10 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       E[, 1, ] <- NA; F[, 1, ] <- NA; G[, 1, ] <- NA; T[, 1, ] <- NA; EAG[, 1, ] <- NA   # the first step is a state, not a flow
 
       lab <- if (d %in% names(driverLabel)) driverLabel[[d]] else paste0(d, " degradation")
+      plus <- if (edgeInLUC) "+|" else ""   # a + member of the tree only when re-attributed; otherwise a memo line
       # nolint start: line_length_linter
       edgeLines <- mbind(edgeLines,
-        setNames(E, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|+|", lab, " (Mt CO2/yr)")),
+        setNames(E, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", plus, lab, " (Mt CO2/yr)")),
         setNames(F, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Fragmentation-driven (Mt CO2/yr)")),
         setNames(G, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Foregone growth (Mt CO2/yr)")),
         setNames(S, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Committed stock (Mt CO2)")),
@@ -774,13 +774,18 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       edgeEAG <- if (is.null(edgeEAG)) EAG else edgeEAG + EAG
     }
 
-    # Re-attribution inside the model's own total. edgeE0 carries 0 in the first step so the totals keep their value.
+    # edgeE0 carries 0 in the first step so totals keep their value. Default (edgeInLUC = FALSE): E is a memo line, every
+    # total is the model's own, Forest degradation = shifting cultivation. With edgeInLUC = TRUE E is re-attributed inside
+    # the model's total (Indirect -> Land-use Change); measured 2026-09-19: E exceeds the edge content of the density channel
+    # by 1.3-2.3x (the channel books the change on the previous step's area and the age-structure shift sits in the area
+    # channel), so the re-attribution over-drains Indirect by 28-141 Mt CO2/yr. Owner's decision; see L4_BUILD_2026-09-19.md.
     edgeE0 <- edgeE
     edgeE0[is.na(edgeE0)] <- 0
     edgeEAG0 <- edgeEAG
     edgeEAG0[is.na(edgeEAG0)] <- 0
     shiftingCult <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
-    degradTotal  <- collapseNames(shiftingCult + edgeE0)
+    degradTotal  <- collapseNames(if (edgeInLUC) shiftingCult + edgeE0 else shiftingCult)
+    if (edgeInLUC) {
     emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] <-
       emissionsReport[, , "Emissions|CO2|Land|+|Land-use Change (Mt CO2/yr)"] + edgeE0
     if (landCarbonSinkType == "grassi") {
@@ -795,7 +800,8 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       if (all(c(agName, bgName) %in% getNames(emissionsReport))) {
         emissionsReport[, , agName] <- emissionsReport[, , agName] - edgeEAG0
         emissionsReport[, , bgName] <- emissionsReport[, , bgName] - (edgeE0 - edgeEAG0)
-      }
+      } else warning("reportEmissions (edge, L4): Indirect ++ lines not found; Indirect drained without its split")
+    }
     }
 
     # Cumulative E (Gt CO2), same construction as .calcCO2's cumulative branch; applied to the cumulative tree below
@@ -825,14 +831,20 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     if (any(abs(checkDegr) > 1e-03, na.rm = TRUE)) {
       warning("CO2 land-use change sub-categories do not add up to total after the edge re-attribution")
     }
+    agName <- "Emissions|CO2|Land|Indirect|++|Above Ground Carbon (Mt CO2/yr)"; bgName <- "Emissions|CO2|Land|Indirect|++|Below Ground Carbon (Mt CO2/yr)"
+    if (all(c(agName, bgName) %in% getNames(emissionsReport))) {
+      checkInd <- emissionsReport[, , "Emissions|CO2|Land|+|Indirect (Mt CO2/yr)"] - emissionsReport[, , agName] - emissionsReport[, , bgName]
+      if (any(abs(checkInd) > 1e-03, na.rm = TRUE)) warning("CO2 Indirect does not equal its above/below-ground split after the edge block")
+    }
     # nolint end
   } else if (edgeMode == "zero") {
     # nolint start: line_length_linter
     sc <- emissionsReport[, , "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Shifting cultivation (Mt CO2/yr)"]
-    z <- collapseNames(sc * 0); zf <- z; zf[, 1, ] <- NA
+    z <- collapseNames(sc * 0); z[is.na(z)] <- 0   # sc is NA in the first step; a state line and the cumulative need 0 there
+    zf <- z; zf[, 1, ] <- NA
     emissionsReport <- mbind(emissionsReport,
       setNames(collapseNames(sc), "Emissions|CO2|Land|Land-use Change|+|Forest degradation (Mt CO2/yr)"),
-      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|+|Edge degradation (Mt CO2/yr)"),
+      setNames(zf, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", if (edgeInLUC) "+|" else "", "Edge degradation (Mt CO2/yr)")),
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Fragmentation-driven (Mt CO2/yr)"),
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Foregone growth (Mt CO2/yr)"),
       setNames(z,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Committed stock (Mt CO2)"),
@@ -1034,7 +1046,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
   # L4 edge re-attribution in the cumulative tree (see the edge block above): the cumulative edge emission moves
   # from Indirect into Land-use Change, where the cumulative tree books degradation under Deforestation; under
   # "grassi" it is added to Land-use Change and the cumulative net total instead. Applied BEFORE the additivity check.
-  if (!is.null(edgeCumE)) {
+  if (!is.null(edgeCumE) && edgeInLUC) {
     emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] <-
       emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] + edgeCumE
     emissionsReport[, , "Emissions|CO2|Land|Cumulative|Land-use Change|+|Deforestation (Gt CO2)"] <-
@@ -1052,9 +1064,12 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
         emissionsReport[, , bgName] <- emissionsReport[, , bgName] - (edgeCumE - edgeCumEAG)
       }
     }
-    # a + child of the cumulative Deforestation node (which already lumps shifting cultivation), so the node stays additive
+  }
+  if (!is.null(edgeCumE)) {
+    # re-attributed: a + child of the cumulative Deforestation node (which already lumps shifting cultivation), so the node
+    # stays additive; memo mode: an informational line without +
     emissionsReport <- mbind(emissionsReport,
-      setNames(edgeCumE, "Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|+|Edge degradation (Gt CO2)"))
+      setNames(edgeCumE, paste0("Emissions|CO2|Land|Cumulative|Land-use Change|Deforestation|", if (edgeInLUC) "+|" else "", "Edge degradation (Gt CO2)")))
   }
 
   checkEmis <- emissionsReport[, , "Emissions|CO2|Land|Cumulative|+|Land-use Change (Gt CO2)"] -

@@ -208,7 +208,9 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
 
       # Convert to Gt
       co2 <- co2 / 1000
-      eClimateChange <- eClimateChange / 1000
+      # the internal density channel must be cumulated like the rest (before 2026-09-19 it was the per-year flow / 1000,
+      # a Gt CO2/yr mislabelled as Gt CO2, found by the L4 audit); the Grassi series is already cumulative
+      if (.landCarbonSink == "grassi") eClimateChange <- eClimateChange / 1000 else eClimateChange <- dimSums(co2[, , "cc"], dim = 3)
     }
 
     eLanduseChange <- dimSums(co2[, , "lu"], dim = 3)

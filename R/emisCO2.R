@@ -34,6 +34,34 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     ageClasses <- readGDX(gdx, "ac")
 
     ###
+    # Secondary-forest age-class carbon density: use the blend GAMS actually solved with.
+    #
+    # DEFECT FIX 2026-09-20 (secdforest vegc stock rebuild). emisCO2 used to REBUILD this density from the two
+    # input curves plus a natural-origin correction:
+    #   * pm_carbon_density_secdforest_ac         FRA-calibrated curve. Under model version L4 the edge
+    #                                             degradation factor is applied to it IN PLACE
+    #                                             (35_natveg/pot_forest_may24/presolve.gms:489-490).
+    #   * pm_carbon_density_secdforest_ac_uncalib raw natveg curve, NEVER haircut (its only assignment is
+    #                                             52_carbon/normal_dec17/start.gms:43).
+    #   * p35_secdforest_natural                  a POSTSOLVE export, used here over the SOLVED area.
+    # GAMS instead blends the two RAW curves with the PRESOLVE natural-origin share
+    # (presolve.gms:253-257) and haircuts the whole blend afterwards (presolve.gms:487-488), exporting the
+    # result as p35_carbon_density_secdforest(t,j,ac,ag_pools) -- the density that q35_carbon and therefore
+    # ov_carbon_stock(secdforest) are built from.
+    # Two errors followed from the rebuild, both measured on the L4 gate runs (2026-09-20):
+    #   (i)  edge ON: the un-haircut uncalib curve entered the natural-origin cohorts, overstating the
+    #        secdforest vegc stock by +490 MtC World in 2100 (0.29 %, 128 MtC in the worst cluster; up to
+    #        44 Mt CO2/yr and 1.8 Gt cumulative 2000-2100 on net land CO2);
+    #   (ii) edge OFF (edge-independent): postsolve share over solved area instead of the presolve share,
+    #        -9.3 / -2.8 / +19.9 / -1.5 MtC World in 2070-2100 (exactly 0 through 2060).
+    # Both vanish when the exported blend is read instead. It is therefore used verbatim for every ag_pool it
+    # carries, and the natural-origin emulation (the stock correction in calculateMainEmissions and the
+    # cohort-origin regrowth split with its loss-side companion structObjVeg) is skipped for those pools.
+    # A gdx without the symbol (upstream develop, pre-PR#876 runs) keeps the previous code path unchanged.
+    secdforestBlend      <- readGDX(gdx, "p35_carbon_density_secdforest", react = "silent")
+    secdforestBlendPools <- if (is.null(secdforestBlend)) character(0) else getItems(secdforestBlend, dim = "ag_pools")
+
+    ###
     # FUNCTIONS -------------------------------------------------------------------------------------------------------
 
     ###
@@ -157,6 +185,19 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
 
         secdforest <- readGDX(gdx, "pm_carbon_density_secdforest_ac", "pm_carbon_density_ac",
                               format = "first_found")[, years, ]
+        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): overwrite with the post-blend, post-haircut
+        # density exported by GAMS, for every ag_pool it carries. litc is bit-identical to the calibrated
+        # curve (the haircut is vegc-only and the calibration does not touch litc), so only vegc moves.
+        if (length(secdforestBlendPools) > 0) {
+            blendSecdf <- secdforestBlend[, years, ]
+            commonItems <- intersect(getItems(blendSecdf, dim = 3), getItems(secdforest, dim = 3))
+            if (!identical(getItems(blendSecdf, dim = 1), getItems(secdforest, dim = 1)) ||
+                length(commonItems) != length(getItems(blendSecdf, dim = 3))) {
+                stop("p35_carbon_density_secdforest does not align with pm_carbon_density_secdforest_ac ",
+                     "in magpie4::emisCO2")
+            }
+            secdforest[, , commonItems] <- blendSecdf[, , commonItems]
+        }
         secdforest <- add_dimension(secdforest, dim = 3.1, add = "land", nm = "secdforest")
 
         other <- readGDX(gdx, "ov_land_other", select = list(type = "level"), react = "silent")
@@ -319,9 +360,16 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # emisNet, and emisArea to match vm_carbon_stock(secdforest).
         # Only vegc is affected (M52 calibration only modifies vegc).
         # Falls back gracefully when parameters are absent (develop compatibility).
+        #
+        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): this block is an EMULATION of the GAMS blend
+        # that got both the share (postsolve over solved area, not the presolve share) and, under model
+        # version L4, the haircut (uncalib enters un-haircut) wrong. Where the gdx carries the exported
+        # blend p35_carbon_density_secdforest it is already in densities$secdforest for that pool, so the
+        # emulation must NOT be applied on top -- it would double-count the natural-origin adjustment.
         p35NaturalSecdf  <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
         densityUncalSecdf <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
-        if (!is.null(p35NaturalSecdf) && !is.null(densityUncalSecdf)) {
+        if (!is.null(p35NaturalSecdf) && !is.null(densityUncalSecdf) &&
+            !("vegc" %in% secdforestBlendPools)) {
             yrsCalc <- getYears(areas$secdforest)
             # natRaw shape (j,t,ac); align with secdforest area
             natRaw  <- p35NaturalSecdf[, yrsCalc, ]
@@ -652,7 +700,14 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         p35NaturalRaw <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
         densityUncalibRaw <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
 
-        haveNaturalSplit <- !is.null(p35NaturalRaw) && !is.null(densityUncalibRaw)
+        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): the cohort-origin split, and its loss-side
+        # companion structObjVeg that reconciles the gross sub-components with the corrected emisArea, are
+        # the gain-side half of the same emulation. With the exported blend in densities$secdforest every
+        # cohort already carries the density GAMS used, so the single-density path is the consistent one
+        # (it is the decomposition of tDiff(area x blend) that emisArea is now built from); keeping the
+        # split would value the natural-origin area at the uncalibrated curve a second time.
+        haveNaturalSplit <- !is.null(p35NaturalRaw) && !is.null(densityUncalibRaw) &&
+                            !("vegc" %in% secdforestBlendPools)
         if (haveNaturalSplit) {
             naturalArea <- area
             naturalArea[, , ] <- 0
@@ -940,12 +995,31 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
 
     .validateCalculation <- function(totalStock, totalStockCheck, output) {
         # --- Ensure independent output of carbonstock is nearly equivalent to own calculation
-        if (any(abs(totalStock - totalStockCheck) > 1e-03, na.rm = TRUE)) {
-            if (any(abs(dimSums(totalStock[, , "soilc"], dim = 3) -
-                        dimSums(totalStockCheck[, , "soilc"], dim = 3)) > 1e-03, na.rm = TRUE)
-                || !dynSom) { # if dynSom is on only check the sums over all land types here
-                warning("Stocks calculated in magpie4::emisCO2 differ from magpie4::carbonstock")
-            }
+        #
+        # DEFECT FIX 2026-09-20: under dynSom this test used to collapse to soilc only -- the outer gate
+        # fired on any pool, but the inner condition it had to pass was a soilc-only comparison -- so the
+        # above-ground rebuild was never checked at all. That is why the 490 MtC secdforest vegc error
+        # documented in CONSTANTS shipped silently. vegc and litc are now compared per land type, cell and
+        # year, at the same 1e-03 MtC tolerance. soilc keeps the relaxed, summed-over-land-type comparison
+        # under dynSom, and only there: with dynSom the soil pool comes from emisSOC and is split over land
+        # types by area weights (see the emisSOC branch above), so its land-type attribution is a
+        # reporting-side construct that is not meant to reproduce carbonstock cell by land type -- only its
+        # sum is. Without dynSom every pool, soilc included, is compared elementwise as before.
+        cPoolsCheck  <- getItems(totalStock, dim = "c_pools")
+        cPoolsStrict <- if (dynSom) setdiff(cPoolsCheck, "soilc") else cPoolsCheck
+        stockMismatch <- FALSE
+        if (length(cPoolsStrict) > 0 &&
+            any(abs(totalStock[, , cPoolsStrict] - totalStockCheck[, , cPoolsStrict]) > 1e-03,
+                na.rm = TRUE)) {
+            stockMismatch <- TRUE
+        }
+        if (dynSom && "soilc" %in% cPoolsCheck &&
+            any(abs(dimSums(totalStock[, , "soilc"], dim = 3) -
+                    dimSums(totalStockCheck[, , "soilc"], dim = 3)) > 1e-03, na.rm = TRUE)) {
+            stockMismatch <- TRUE
+        }
+        if (stockMismatch) {
+            warning("Stocks calculated in magpie4::emisCO2 differ from magpie4::carbonstock")
         }
 
         # --- Ensure that area - subcomponent residual is nearly zero

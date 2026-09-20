@@ -90,15 +90,28 @@ test_that("a changing deficit fraction on a static forest is pure fragmentation-
   list(Aac = Aac, rhoAc = rhoAc, A = A, C0 = C0, D = g * C0)
 }
 
-.acTerms <- function(s, years, hvMat = NULL) {
-  adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, magpie4:::.edgeAcShift(years))
-  hvC0 <- NULL
-  if (!is.null(hvMat)) {
-    hv <- s$Aac * 0
-    for (i in seq_along(years)) hv[, i, ] <- hvMat[i, ]
+.acMat <- function(s, years, m) {
+  x <- s$Aac * 0
+  for (i in seq_along(years)) x[, i, ] <- m[i, ]
+  x
+}
+
+.acTerms <- function(s, years, hvMat = NULL, redMat = NULL) {
+  shift <- magpie4:::.edgeAcShift(years)
+  adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, shift)
+  hvC0 <- NULL; hvArea <- NULL; rhoEst <- NULL; redC0 <- NULL
+  hv <- if (is.null(hvMat)) NULL else .acMat(s, years, hvMat)
+  if (!is.null(hv)) {
     hvC0 <- magpie4:::.edgeHarvestC0(hv, s$rhoAc)
+    hvArea <- magclass::dimSums(hv, dim = 3)
+    rhoEst <- magpie4:::.edgeEstRho(s$rhoAc, shift)
   }
-  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv, hvC0 = hvC0)
+  if (!is.null(redMat)) {
+    red <- .acMat(s, years, redMat)
+    redC0 <- magpie4:::.edgeHarvestC0(red - (if (is.null(hv)) red * 0 else hv), s$rhoAc)
+  }
+  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv, hvC0 = hvC0,
+                                     hvArea = hvArea, rhoEst = rhoEst, redC0 = redC0)
 }
 
 test_that("a clear-cut cohort at constant area is cohort turnover, not foregone growth (known-bug case)", {
@@ -239,4 +252,97 @@ test_that("Hharvest is zero where the model does not clear-cut per age class", {
   tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)          # C0adv and hvC0 both NULL
   expect_true(all(as.vector(tm$Hharvest)[-(1:3)] == 0))
   expect_true(all(is.na(as.vector(tm$Hharvest)[1:3])))
+})
+
+# ---------------------------------------------------------------------------------------------------------------
+# PER-COHORT definition of E and T (spec amendment 2026-09-20, DECIDED; record section 11 item 8). E'' is the
+# deficit change on the standing, AGED cohorts and T'' carries every per-class area change at the class's own
+# deficit, so none of the composition change that the pool-level split had to name H is left in the emission line.
+# Closed forms: E'' = g_t C0adv - D_t-1, F'' = (g_t - g_t-1) C0adv, G'' = g_t-1 (C0adv - C0_t-1),
+# T'' = D_t - g_t C0adv. Identities F'' + G'' = E'' and E'' + T'' = dD.
+
+test_that("per cohort, a clear-cut is entirely area transfer and E'' is the surviving growth only", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "acx")
+  A   <- rbind(c(0, 10), c(4, 6))      # 4 of 10 Mha clear-cut out of acx, pool area unchanged
+  rho <- rbind(c(0, 100), c(0, 110))
+  hv  <- rbind(c(0, 0), c(0, 4))
+  s  <- .acSynth(years, acs, A, rho, c(0.2, 0.2))
+  tm <- .acTerms(s, years, hvMat = hv, redMat = hv)   # nothing leaves the pool beyond the harvest
+  # the whole 10 Mha aged from acx to acx and gained 10 tC/ha; at g = 0.2 that is 20 Mio tC and nothing else
+  expect_equal(as.vector(tm$Epc)[2], 0.2 * (110 - 100) * 10, tolerance = 1e-12)   # 20
+  expect_equal(as.vector(tm$Gpc)[2], as.vector(tm$Epc)[2], tolerance = 1e-12)
+  expect_equal(as.vector(tm$Fpc)[2], 0, tolerance = 1e-12)
+  expect_gt(as.vector(tm$Epc)[2], 0)                                   # no longer a negative "emission"
+  # the released deficit is now area transfer, and all of it is the harvest sub-line
+  expect_equal(as.vector(tm$Tpc)[2], -0.2 * 110 * 4, tolerance = 1e-12)            # -88
+  expect_equal(as.vector(tm$TpcHarv)[2], as.vector(tm$Tpc)[2], tolerance = 1e-12)
+  expect_equal(as.vector(tm$TpcConv)[2], 0, tolerance = 1e-12)
+  expect_equal(as.vector(tm$TpcOther)[2], 0, tolerance = 1e-12)
+  # identities
+  expect_equal(as.vector(tm$Fpc + tm$Gpc)[2], as.vector(tm$Epc)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$Epc + tm$Tpc)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+  # and the pool-level continuity triple is untouched by the new terms
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+})
+
+test_that("E'' is the same under a proportional and a selective area loss; T'' carries the selection", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  rho   <- rbind(c(0, 20, 45, 120), c(0, 22, 48, 125))
+  # advanced areas are (0, 0, 6, 4); C0adv = 788, C0_t-1 = 300, D_t-1 = 75, so E'' = 0.25 * 788 - 75 = 122
+  prop <- .acSynth(years, acs, rbind(c(0, 6, 4, 0), c(0, 0, 4.8, 3.2)), rho, c(0.25, 0.25))
+  sel  <- .acSynth(years, acs, rbind(c(0, 6, 4, 0), c(0, 0, 6, 2)),     rho, c(0.25, 0.25))
+  tp <- .acTerms(prop, years, redMat = rbind(c(0, 0, 0, 0), c(0, 0, 1.2, 0.8)))
+  ts <- .acTerms(sel,  years, redMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 2)))
+  expect_equal(as.vector(tp$Epc)[2], 0.25 * 788 - 75, tolerance = 1e-12)           # 122
+  expect_equal(as.vector(ts$Epc)[2], as.vector(tp$Epc)[2], tolerance = 1e-12)      # identical: E'' sees no area
+  expect_equal(as.vector(tp$Tpc)[2], 0.25 * 630.4 - 197, tolerance = 1e-12)        # -39.4
+  expect_equal(as.vector(ts$Tpc)[2], 0.25 * 538 - 197, tolerance = 1e-12)          # -62.5
+  expect_equal(as.vector(ts$Tpc - tp$Tpc)[2], -23.1, tolerance = 1e-10)            # the selection, not an emission
+  # the conversion sub-line accounts for all of it in both cases
+  expect_equal(as.vector(tp$TpcConv)[2], as.vector(tp$Tpc)[2], tolerance = 1e-12)
+  expect_equal(as.vector(ts$TpcConv)[2], as.vector(ts$Tpc)[2], tolerance = 1e-12)
+  for (tm in list(tp, ts)) {
+    expect_equal(as.vector(tm$Fpc + tm$Gpc)[2], as.vector(tm$Epc)[2], tolerance = 1e-10)
+    expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[2], as.vector(tm$Tpc)[2], tolerance = 1e-10)
+  }
+  expect_equal(as.vector(tp$Epc + tp$Tpc)[2], as.vector(prop$D)[2] - as.vector(prop$D)[1], tolerance = 1e-10)
+  expect_equal(as.vector(ts$Epc + ts$Tpc)[2], as.vector(sel$D)[2] - as.vector(sel$D)[1], tolerance = 1e-10)
+})
+
+test_that("a 10-year step advances two classes and establishes over ac0 and ac5", {
+  years <- c("y2060", "y2070")                     # dt = 10, so k = 2 and ac_est = {ac0, ac5}
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  rho   <- rbind(c(1, 2, 3, 4), c(10, 20, 30, 40))
+  # t-1 areas (2, 3, 4, 1) -> advanced (0, 0, 2, 8); C0adv = 2*30 + 8*40 = 380, C0_t-1 = 24, D_t-1 = 2.4
+  expect_equal(as.vector(magpie4:::.edgeEstRho(
+    .acSynth(years, acs, rbind(c(2, 3, 4, 1), c(0, 0, 2, 8)), rho, c(0.1, 0.1))$rhoAc,
+    magpie4:::.edgeAcShift(years)))[2], 15, tolerance = 1e-12)          # mean(rho_ac0, rho_ac5) at t
+  aged <- .acSynth(years, acs, rbind(c(2, 3, 4, 1), c(0, 0, 2, 8)), rho, c(0.1, 0.1))
+  ta <- .acTerms(aged, years)
+  expect_equal(as.vector(ta$Epc)[2], 0.1 * 380 - 2.4, tolerance = 1e-12)           # 35.6
+  expect_equal(as.vector(ta$Gpc)[2], 0.1 * (380 - 24), tolerance = 1e-12)          # 35.6
+  expect_equal(as.vector(ta$Tpc)[2], 0, tolerance = 1e-12)                         # pure ageing over two classes
+  expect_equal(as.vector(ta$Epc + ta$Tpc)[2], as.vector(aged$D)[2] - as.vector(aged$D)[1], tolerance = 1e-10)
+  # same step with 3 Mha clear-cut out of acx, re-established half in ac0 and half in ac5
+  cut <- .acSynth(years, acs, rbind(c(2, 3, 4, 1), c(1.5, 1.5, 2, 5)), rho, c(0.1, 0.1))
+  hv  <- rbind(c(0, 0, 0, 0), c(0, 0, 0, 3))
+  tc <- .acTerms(cut, years, hvMat = hv, redMat = hv)
+  expect_equal(as.vector(tc$Epc)[2], 0.1 * 380 - 2.4, tolerance = 1e-12)           # unchanged by the harvest
+  expect_equal(as.vector(tc$Tpc)[2], 0.1 * (15 * 3 - 3 * 40), tolerance = 1e-12)   # -7.5
+  expect_equal(as.vector(tc$TpcHarv)[2], as.vector(tc$Tpc)[2], tolerance = 1e-12)
+  expect_equal(as.vector(tc$Epc + tc$Tpc)[2], as.vector(cut$D)[2] - as.vector(cut$D)[1], tolerance = 1e-10)
+})
+
+test_that("a pool without age classes keeps the pool-level terms and books all of T'' as other transitions", {
+  s <- .synthPool(6)
+  tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)   # no per-age-class inputs at all
+  k <- -(1:3)
+  expect_equal(as.vector(tm$Epc)[k], as.vector(tm$E)[k], tolerance = 1e-12)
+  expect_equal(as.vector(tm$Tpc)[k], as.vector(tm$T)[k], tolerance = 1e-12)
+  expect_equal(as.vector(tm$TpcOther)[k], as.vector(tm$Tpc)[k], tolerance = 1e-12)
+  expect_true(all(as.vector(tm$TpcHarv)[k] == 0), all(as.vector(tm$TpcConv)[k] == 0))
+  expect_equal(as.vector(tm$Fpc + tm$Gpc)[k], as.vector(tm$Epc)[k], tolerance = 1e-10)
+  expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[k], as.vector(tm$Tpc)[k], tolerance = 1e-12)
 })

@@ -89,6 +89,50 @@
 #' Spec: fragmentation repo, 05-temporal-accounting/documents/COMMITTED_STOCK_ACCOUNTING.md (section 2 and the
 #' amendment of 2026-09-20), L4_BUILD_2026-09-19.md sections 9.1 (a) and 10 (A2-1).
 #'
+#' PER-COHORT TERMS (E'', F'', G'', T''; spec amendment of 2026-09-20 "per-cohort definition of E and T", DECIDED,
+#' record section 11 item 8). The pool-level E above charges area leaving at the POOL-MEAN deficit density and
+#' therefore carries both the mirror of T and the selection of which classes were converted; H is the pool-level
+#' symptom of the same thing. The per-cohort pair removes it by construction. With dd_ac = g rho_ac and src(ac) the
+#' class a cohort in ac came from (acx has k + 1 sources, so the sum below is over all of them):
+#' \itemize{
+#'   \item E'' = sum_ac Atilde_ac,t (dd_ac,t - dd_src(ac),t-1): the deficit change on the STANDING, AGED cohorts.
+#'         Because sum_ac Atilde_ac,t dd_ac,t = g_t C0adv_t and sum_ac Atilde_ac,t dd_src(ac),t-1 = D_t-1 (the
+#'         advanced distribution carries the previous cohorts' own areas and deficits), this collapses to
+#'         E'' = g_t C0adv_t - D_t-1. No per-class loop is needed.
+#'   \item F'' = sum_ac Atilde_ac,t (g_t - g_t-1) rho_ac,t = (g_t - g_t-1) C0adv_t
+#'   \item G'' = sum_ac Atilde_ac,t g_t-1 (rho_ac,t - rho_src(ac),t-1) = g_t-1 (C0adv_t - C0_t-1)
+#'   \item T'' = sum_ac dd_ac,t (A_ac,t - Atilde_ac,t) = D_t - g_t C0adv_t: every per-class area change at the
+#'         class's OWN deficit density (harvest resets, conversions in and out, disturbance resets, establishment).
+#' }
+#' F'' + G'' = E'' and E'' + T'' = D_t - D_t-1, both by construction. INTERACTION CONVENTION: F'' is evaluated at
+#' the CURRENT density rho_ac,t and G'' at the PREVIOUS exposure g_t-1, so the Bennet interaction term
+#' Delta g Delta rho sits in F'' - the same convention as the pool-level F and G above, kept deliberately.
+#' Note the basis change: E'' sits on the previous step's area (sum_ac Atilde = A_t-1), the pool-level E on A_t.
+#' That is the point of the amendment - all area movement is in T'', none of it in E''.
+#'
+#' Sub-lines of T'', informational and disjoint, each from an exported state:
+#' \itemize{
+#'   \item T''_harvest = g_t (rhoEst_t hvArea_t - hvC0_t): the clear-cut reset. Area hv_ac,t leaves class ac at
+#'         dd_ac,t and re-enters the pool in the ESTABLISHMENT classes. GAMS spreads it equally over ac_est, which
+#'         is the first k_t classes (28_ageclass/oct24/presolve.gms:10, ord(ac) <= m_yeardiff_forestry(t)/5, i.e.
+#'         exactly the classes Atilde leaves empty) and harvested secondary forest STAYS secondary forest
+#'         (35_natveg q35_secdforest_regeneration), so rhoEst is the mean unreduced density over those classes.
+#'         For a 5-yr step that is ac0 alone, where rho is 0 by construction; for a 10-yr step it is the mean of
+#'         ac0 and ac5. Area-neutral for the pool, which is why the pool-level T is blind to it.
+#'   \item T''_conv = -g_t sum_ac rho_ac,t (red_ac,t - hv_ac,t): area genuinely leaving the pool, at each class's
+#'         own deficit. The harvest is SUBTRACTED because \code{ov35_secdforest_reduction} bounds
+#'         \code{ov35_hvarea_secdforest} from above (q35_hvarea_secdforest is =l=; verified on the gate run, min
+#'         red - hv = -7.6e-14), so counting both would double-count the leaving side.
+#'   \item T''_other = T'' - T''_harvest - T''_conv: establishment from other sources (primforest harvest
+#'         reclassified, restoration), youngsecdf maturation, conversions IN, and the disturbance redistribution -
+#'         the latter because \code{red} is measured against the post-disturbance presolve state while Atilde is
+#'         the shifted SOLVED state (see the solved-state note above). Defined as the residual, so the three sum
+#'         to T'' exactly.
+#' }
+#' For a pool WITHOUT age classes (primforest) the per-cohort terms ARE the pool-level ones: E'' = E, F'' = F,
+#' G'' = G, T'' = T; it has no per-class harvest or reduction export, so its whole T'' is booked as
+#' T''_other and the harvest and conversion sub-lines are 0 (the three still sum to T'' exactly).
+#'
 #' @param D committed deficit stock per cluster and step (magpie object, cells x years x 1; Mio tC)
 #' @param A solved area of the pool (same shape; Mha)
 #' @param C0 unreduced carbon of the pool on the solved area, sum over age classes of rho_ac A_ac (same shape; Mio tC)
@@ -98,28 +142,55 @@
 #' @param hvC0 unreduced carbon on the area harvested in this step, sum over age classes of rho_ac,t hv_ac,t (same
 #'   shape; Mio tC), from \code{.edgeHarvestC0}. NULL for a pool the model does not clear-cut per age class, which
 #'   gives Hharvest = 0.
-#' @return list of magpie objects S, E, F, G, H, Hharvest, T (Mio tC per step; flows are per step, not per year)
+#' @param hvArea area clear-cut in this step, sum_ac hv_ac,t (same shape; Mha)
+#' @param rhoEst mean unreduced density of the establishment classes (the first k_t age classes) at t (same shape;
+#'   tC/ha), from \code{.edgeEstRho}: where the clear-cut area re-enters the pool
+#' @param redC0 unreduced carbon on the NON-HARVEST area reduction, sum_ac rho_ac,t (red_ac,t - hv_ac,t) (same
+#'   shape; Mio tC), i.e. the area that genuinely leaves the pool
+#' @return list of magpie objects S, E, F, G, H, Hharvest, T (pool level) and Epc, Fpc, Gpc, Tpc, TpcHarv,
+#'   TpcConv, TpcOther (per cohort), all Mio tC per step (flows are per step, not per year)
 #' @author Michael Crawford
 #' @keywords internal
 #' @noRd
-.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL, hvC0 = NULL) {
+.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL, hvC0 = NULL,
+                                     hvArea = NULL, rhoEst = NULL, redC0 = NULL) {
   div0 <- function(a, b) { r <- a / b; r[!is.finite(r)] <- 0; r }
   dd  <- div0(D, A)
   rho <- div0(C0, A)
   g   <- div0(D, C0)
   lagA <- .edgeLagYears(A)
   lagG <- .edgeLagYears(g)
+  lagD <- .edgeLagYears(D)
   # rhoAdv: the mean unreduced density of the previous step's cohorts, aged one step. Without age classes it is
   # rho itself, so the cohort-turnover term H vanishes and G is the former single foregone-growth term.
   rhoAdv <- if (is.null(C0adv)) rho else div0(C0adv, lagA)
-  list(S = D,
-       E = (dd - .edgeLagYears(dd)) * A,
-       F = (g - .edgeLagYears(g)) * rho * A,
-       G = lagG * (rhoAdv - .edgeLagYears(rho)) * A,
-       H = lagG * (rho - rhoAdv) * A,
-       # the harvest-reset part of H: a sub-term, NOT an addend of E. lagG * 0 keeps the first step NA.
-       Hharvest = if (is.null(hvC0)) lagG * 0 else -lagG * hvC0,
-       T = .edgeLagYears(dd) * (A - lagA))
+  out <- list(S = D,
+              E = (dd - .edgeLagYears(dd)) * A,
+              F = (g - .edgeLagYears(g)) * rho * A,
+              G = lagG * (rhoAdv - .edgeLagYears(rho)) * A,
+              H = lagG * (rho - rhoAdv) * A,
+              # the harvest-reset part of H: a sub-term, NOT an addend of E. lagG * 0 keeps the first step NA.
+              Hharvest = if (is.null(hvC0)) lagG * 0 else -lagG * hvC0,
+              T = .edgeLagYears(dd) * (A - lagA))
+  # Per-cohort pair. Written so that E'' + T'' = dD cancels the g_t C0adv term EXACTLY in floating point; the
+  # F'' + G'' = E'' closure carries one rounding of g_t-1 C0_t-1 against D_t-1 (~1e-16 relative).
+  if (is.null(C0adv)) {
+    zero <- out$E * 0                                    # keeps the first step NA
+    # no per-class harvest or reduction export exists for such a pool, so its whole area transfer is "other"
+    out <- c(out, list(Epc = out$E, Fpc = out$F, Gpc = out$G, Tpc = out$T,
+                       TpcHarv = zero, TpcConv = zero, TpcOther = out$T))
+  } else {
+    Epc <- g * C0adv - lagD
+    Tpc <- D - g * C0adv
+    harv <- if (is.null(hvC0) || is.null(hvArea) || is.null(rhoEst)) Tpc * 0 else g * (rhoEst * hvArea - hvC0)
+    conv <- if (is.null(redC0)) Tpc * 0 else -g * redC0
+    out <- c(out, list(Epc = Epc,
+                       Fpc = (g - lagG) * C0adv,
+                       Gpc = lagG * (C0adv - .edgeLagYears(C0)),
+                       Tpc = Tpc,
+                       TpcHarv = harv, TpcConv = conv, TpcOther = Tpc - harv - conv))
+  }
+  out
 }
 
 #' @title edgeLagYears
@@ -235,4 +306,31 @@
     stop("reportEmissions (edge, L4): the harvested-area and unreduced-density age classes of a pool do not match")
   }
   magclass::dimSums(hvAc * rhoAc, dim = 3)
+}
+
+#' @title edgeEstRho
+#' @description Mean unreduced density of the ESTABLISHMENT age classes at t: the classes clear-cut area re-enters.
+#'   GAMS spreads establishment equally over \code{ac_est}, which 28_ageclass/oct24/presolve.gms:10 sets to
+#'   \code{ord(ac) <= m_yeardiff_forestry(t)/5} - the first k_t classes, exactly the ones the cohort shift leaves
+#'   empty. \code{ac_est} is a DYNAMIC set, so a gdx carries only its last step's membership and it must be derived
+#'   from k_t here rather than read. Internal; see .edgeCommittedStockTerms.
+#' @param rhoAc unreduced vegc density per cluster, step and age class (magpie, cells x years x ac; tC/ha)
+#' @param shift cohort shift per step from .edgeAcShift (NA first)
+#' @return magpie object (cells x years x 1; tC/ha), NA where the shift is NA
+#' @author Michael Crawford
+#' @keywords internal
+#' @noRd
+.edgeEstRho <- function(rhoAc, shift) {
+  rhoAc <- .edgeAcSort(rhoAc)
+  r <- as.array(rhoAc)
+  nc <- dim(r)[1]; ny <- dim(r)[2]; nac <- dim(r)[3]
+  res <- matrix(NA_real_, nrow = nc, ncol = ny)
+  for (t in seq_len(ny)) {
+    k <- shift[t]
+    if (is.na(k) || k < 1) next
+    res[, t] <- rowMeans(matrix(r[, t, seq_len(min(k, nac))], nrow = nc))
+  }
+  out <- magclass::dimSums(rhoAc, dim = 3)
+  out[, , ] <- res
+  out
 }

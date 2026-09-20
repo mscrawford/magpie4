@@ -40,7 +40,8 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Edge degradation | Mt CO2/yr | Edge emission on standing natural forest: the change of the committed edge carbon deficit on the forest standing at the end of the step (committed-stock accounting, model version L4); under landCarbonSinkType = "internal" re-attributed from Indirect into Land-use Change, so net Land is the model's own total
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Fragmentation-driven | Mt CO2/yr | Part of the edge emission from the applied deficit fraction changing (the edge fraction)
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Foregone growth | Mt CO2/yr | Part of the edge emission from the unreduced reference density changing along the growth curve, COHORT-CONSISTENT: the previous step's age distribution advanced by the step's cohort shift and evaluated on the current step's curve (the standing forest's growth and ageing that the deficit fraction removes)
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Cohort turnover | Mt CO2/yr | Part of the edge emission from the pool's age-class COMPOSITION changing at given area: clear-cut harvest resetting cohorts from acx to ac0 releases their deficit (negative), plus dilution by net new area entering the young classes. Fragmentation-driven + Foregone growth + Cohort turnover = Edge degradation (split added 2026-09-20; before it the composition change sat in Foregone growth)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Cohort turnover | Mt CO2/yr | Part of the edge emission from the pool's age-class COMPOSITION changing: harvest resets (clear-cut moves cohorts to ac0 without moving area and releases their deficit), conversion selectivity (the converted classes are not a proportional slice of the pool), disturbance resets (shifting cultivation), maturation (youngsecdf crossing into secdforest), establishment, and the revaluation of area entering or leaving at the pool-mean deficit density (the mirror of Area transfer, usually the one positive component). Fragmentation-driven + Foregone growth + Cohort turnover = Edge degradation (split added 2026-09-20; before it the whole composition change sat in Foregone growth)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Cohort turnover\|Harvest resets | Mt CO2/yr | Informational sub-term of Cohort turnover, not a + member: the deficit released when clear-cut harvest resets cohorts, -g_t-1 sum_ac rho_ac,t hv_ac,t on the solved harvest areas (secdforest and youngsecdf; the model does not clear-cut the afforestation pools per age class). The single largest component of Cohort turnover (97 % of the base run's World 2035 line, 86 % of the price pilot's), but not a stable share of it: the other components do not cancel and this line can exceed Cohort turnover in magnitude when the positive area-basis component is large
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Committed stock | Mt CO2 | Committed edge carbon deficit on the solved natural forest (primforest, secdforest, youngsecdf and the natural-curve ndc/aff afforestation pools); a stock, not a flow
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer | Mt CO2/yr | Diagnostic: deficit arriving or leaving with area change; that carbon is booked in land-use change at reduced density, so this is not an emission line. Edge degradation + Area transfer = change of the committed stock
 #' Emissions\|CO2\|Land\|Land-use Change\|+\|Other land conversion | Mt CO2/yr | CO2 emissions from conversion of other natural land
@@ -660,16 +661,26 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
   #   E_t = sum_p (dd_p,t - dd_p,t-1) A_p,t             EDGE EMISSION on standing forest (headline)
   #   F_t = sum_p (g_p,t - g_p,t-1) rho_p,t A_p,t       of which FRAGMENTATION-DRIVEN (the deficit fraction changing)
   #   G_t = sum_p g_p,t-1 (rhoAdv_p,t - rho_p,t-1) A_p,t   of which FOREGONE GROWTH, the cohort-consistent ageing term
-  #   H_t = sum_p g_p,t-1 (rho_p,t - rhoAdv_p,t) A_p,t     of which COHORT TURNOVER (harvest resets, area dilution)
+  #   H_t = sum_p g_p,t-1 (rho_p,t - rhoAdv_p,t) A_p,t     of which COHORT TURNOVER (age-class composition changing)
+  #   Hharv_t = -sum_p g_p,t-1 sum_ac rho_ac,t hv_ac,t   the harvest-reset SUB-TERM of H (informational, not an addend)
   #   T_t = sum_p dd_p,t-1 (A_p,t - A_p,t-1)            AREA TRANSFER (diagnostic; that carbon sits in land-use change)
   # rhoAdv_p,t is the pool's mean unreduced density if its cohorts had ONLY AGED: the previous step's age-class areas
   # advanced by k_t = dt_t / 5 classes (acx collects the overflow, exactly as GAMS ages them in the 35_natveg and
   # 32_forestry presolves) and evaluated on the current step's unreduced densities, divided by A_p,t-1
-  # (.edgeAdvancedC0). G + H is the former single "foregone growth" term g_t-1 (rho_t - rho_t-1) A_t, which booked
+  # (.edgeAdvancedC0), with A_t-1 as the denominator because the advanced distribution carries the PREVIOUS step's
+  # area. The distribution shifted is the SOLVED ov35 / ov_land_other / ov32_land of t-1, not GAMS's post-disturbance
+  # presolve state (the gdx carries no other end-of-step per-age-class state): the shift RULE mirrors GAMS, the state
+  # it acts on is the solved one, which is why a shifting-cultivation disturbance reset lands in H.
+  # G + H is the former single "foregone growth" term g_t-1 (rho_t - rho_t-1) A_t, which booked
   # every age-class composition change as a density change: clear-cut harvest moves cohorts from acx to ac0 without
   # moving area, so G absorbed the released deficit as negative growth (-226.6 Mt CO2/yr of the World 2035 secdforest
   # line of the SSP2 price pilot; third audit round 2026-09-20, finding A2-1, and the spec's amendment of that date).
-  # Pools without age classes (primforest) have rhoAdv = rho and H = 0.
+  # H collects harvest resets (the Hharv sub-term, 86-97 % of it in 2035 but not a stable share), conversion
+  # selectivity, disturbance resets,
+  # maturation, establishment and the revaluation of area moving at the pool mean (the mirror of T); it is a
+  # COMPOSITION term, zero whenever an area change is class-proportional. G credits the growth of cohorts cut in the
+  # same step (2-3.5 % of G) and H then removes their whole deficit: see .edgeCommittedStockTerms for the component
+  # measurements and the convention. Pools without age classes (primforest) have rhoAdv = rho and H = 0.
   # Identities: F + G + H = E and E + T = D_t - D_t-1, exactly. Both terms of E sit on the same land A_p,t: no basis
   # mismatch, no ratio, no clamp, no exit. E is a RE-ATTRIBUTION inside the model's own total: under
   # landCarbonSinkType = "internal" it moves from the density-change channel (Indirect) into Land-use Change |
@@ -715,6 +726,8 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     secdL   <- .lvl("ov35_secdforest")                           # (j, t, ac)                Mha
     otherL  <- .lvl("ov_land_other")                             # (j, t, othertype35.ac)    Mha
     for32L  <- .lvl("ov32_land")                                 # (j, t, type32.ac)         Mha
+    hvSecd  <- .lvl("ov35_hvarea_secdforest")                    # (j, t, ac)                Mha
+    hvOther <- .lvl("ov35_hvarea_other")                         # (j, t, othertype35.ac)    Mha
     unredP  <- .par("p35_vegc_unreduced_primforest")             # (j, t)                    tC/ha
     unredS  <- .par("p35_vegc_unreduced_secdforest")             # (j, t, ac)                tC/ha
     unredY  <- .par("p35_vegc_unreduced_youngsecdf")             # (j, t, ac)                tC/ha
@@ -754,12 +767,14 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
           D  = dimSums(Dd[, , "secdforest"], dim = 3),
           A  = dimSums(secdL, dim = 3),
           C0 = dimSums(unredS * secdL, dim = 3),
-          C0adv = .edgeAdvancedC0(secdL, unredS, acShift)),
+          C0adv = .edgeAdvancedC0(secdL, unredS, acShift),
+          hvC0 = .edgeHarvestC0(hvSecd, unredS)),
         youngsecdf = .edgeCommittedStockTerms(
           D  = dimSums(Dd[, , "other"], dim = 3),
           A  = dimSums(otherL[, , "youngsecdf"], dim = 3),
           C0 = dimSums(unredY * youngA, dim = 3),
-          C0adv = .edgeAdvancedC0(youngA, unredY, acShift)))
+          C0adv = .edgeAdvancedC0(youngA, unredY, acShift),
+          hvC0 = .edgeHarvestC0(collapseNames(hvOther[, , "youngsecdf"]), unredY)))
       if (!is.null(committed32)) {
         for (p in intersect(c("ndc", "aff"), getNames(committed32, dim = 1))) {
           a32 <- collapseNames(for32L[, , p])
@@ -768,10 +783,11 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
             D  = dimSums(committed32[, , p], dim = 3),
             A  = dimSums(for32L[, , p], dim = 3),
             C0 = dimSums(rho32 * a32, dim = 3),
-            C0adv = .edgeAdvancedC0(a32, rho32, acShift))
+            C0adv = .edgeAdvancedC0(a32, rho32, acShift),
+            hvC0 = NULL)   # the afforestation pools are not clear-cut per age class (no ov32_hvarea in the gdx)
         }
       }
-      terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", H = "H", T = "T"),
+      terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", H = "H", Hharvest = "Hharvest", T = "T"),
                       function(k) Reduce(`+`, lapply(pools, `[[`, k)))
       termsEAG <- Reduce(`+`, lapply(names(pools), function(p) pools[[p]]$E * agWeight(p)))
 
@@ -782,9 +798,11 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       F <- .agg(terms$F) * 44 / 12 / timestepLength
       G <- .agg(terms$G) * 44 / 12 / timestepLength
       H <- .agg(terms$H) * 44 / 12 / timestepLength
+      Hharv <- .agg(terms$Hharvest) * 44 / 12 / timestepLength
       T <- .agg(terms$T) * 44 / 12 / timestepLength
       EAG <- .agg(termsEAG) * 44 / 12 / timestepLength
       E[, 1, ] <- NA; F[, 1, ] <- NA; G[, 1, ] <- NA; H[, 1, ] <- NA; T[, 1, ] <- NA; EAG[, 1, ] <- NA   # the first step is a state, not a flow
+      Hharv[, 1, ] <- NA
       # F + G + H = E by construction; a break here means the cohort-shift helpers and the terms disagree
       idSplit <- E - F - G - H
       if (any(abs(as.vector(idSplit)) > 1e-06, na.rm = TRUE)) {
@@ -799,6 +817,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
         setNames(F, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Fragmentation-driven (Mt CO2/yr)")),
         setNames(G, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Foregone growth (Mt CO2/yr)")),
         setNames(H, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|+|Cohort turnover (Mt CO2/yr)")),
+        setNames(Hharv, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Cohort turnover|Harvest resets (Mt CO2/yr)")),
         setNames(S, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Committed stock (Mt CO2)")),
         setNames(T, paste0("Emissions|CO2|Land|Land-use Change|Forest degradation|", lab, "|Area transfer (Mt CO2/yr)")))
       # nolint end
@@ -886,6 +905,7 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Fragmentation-driven (Mt CO2/yr)"),
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Foregone growth (Mt CO2/yr)"),
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|+|Cohort turnover (Mt CO2/yr)"),
+      setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Cohort turnover|Harvest resets (Mt CO2/yr)"),
       setNames(z,  "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Committed stock (Mt CO2)"),
       setNames(zf, "Emissions|CO2|Land|Land-use Change|Forest degradation|Edge degradation|Area transfer (Mt CO2/yr)"))
     edgeCumE <- z / 1000; edgeCumEAG <- z / 1000; edgeCumH <- z / 1000

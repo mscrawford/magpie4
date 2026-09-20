@@ -12,7 +12,8 @@
 #'   \item E = (dd_t - dd_t-1) A_t: edge emission on the forest standing at the end of the step
 #'   \item F = (g_t - g_t-1) rho_t A_t: fragmentation-driven part (the deficit fraction changing)
 #'   \item G = g_t-1 (rhoAdv_t - rho_t-1) A_t: foregone growth, the COHORT-CONSISTENT ageing term
-#'   \item H = g_t-1 (rho_t - rhoAdv_t) A_t: cohort turnover (harvest resets and area dilution)
+#'   \item H = g_t-1 (rho_t - rhoAdv_t) A_t: cohort turnover (everything else the mean density does)
+#'   \item Hharvest = -g_t-1 sum_ac rho_ac,t hv_ac,t: the harvest-reset part of H, reported informationally
 #'   \item T = dd_t-1 (A_t - A_t-1): area transfer, a diagnostic (that carbon sits in land-use change)
 #' }
 #' Identities: F + G + H = E and E + T = D_t - D_t-1, exactly. Flows are NA in the first step. Where a pool has
@@ -34,12 +35,55 @@
 #'         youngest classes receive nothing. Total area is preserved, sum_ac Atilde_ac,t = A_t-1 (the two GAMS
 #'         statements, the "usual shift" and the end-of-set correction, in that order).
 #'   \item C0adv_t = sum_ac rho_ac,t Atilde_ac,t and rhoAdv_t = C0adv_t / A_t-1: the mean unreduced density the
-#'         pool would carry if its cohorts had only aged.
+#'         pool would carry if its cohorts had only aged. The denominator is A_t-1, not A_t, because the advanced
+#'         distribution carries the PREVIOUS step's area (sum_ac Atilde = A_t-1); dividing by A_t would not give a
+#'         density and would leak the area change into G.
+#'   \item The input distribution is the SOLVED state of t-1 (\code{ov35_secdforest}, \code{ov_land_other},
+#'         \code{ov32_land} levels), not GAMS's post-disturbance presolve state \code{pc35_*}: the gdx carries no
+#'         other end-of-step per-age-class state. GAMS applies the shifting-cultivation disturbance BEFORE the
+#'         shift (presolve.gms, the \code{p35_disturbance_loss_secdf} block), so a disturbance reset is NOT in this
+#'         counterfactual and therefore shows up in H. The shift RULE mirrors GAMS; the state it is applied to is
+#'         the solved one.
 #' }
-#' So G is standing forest gaining density along the growth curve and H is everything else the mean density does:
-#' harvest resetting cohorts to ac0 (the dominant part, -g_t-1 sum_ac rho_ac,t hv_ac,t) and dilution by net new
-#' area entering the young classes. G + H is the former single "foregone growth" term
-#' g_t-1 (rho_t - rho_t-1) A_t, so E, F, T and the two identities are unchanged by the split.
+#' G is standing forest gaining density along its growth curve, and nothing else. H collects every other reason
+#' the pool's mean unreduced density moves, i.e. every change of the age-class COMPOSITION:
+#' \itemize{
+#'   \item HARVEST RESETS: clear-cut moves area from its class to ac0 without changing the pool's area, releasing
+#'         -g_t-1 sum_ac rho_ac,t hv_ac,t (\code{ov35_hvarea_secdforest}, \code{ov35_hvarea_other}). Reported as
+#'         the informational line "Cohort turnover | Harvest resets"; the single largest component, 97 % of the base
+#'         run's World 2035 H and 86 % of the price pilot's. Do NOT read it as a share in general: the other
+#'         components do not cancel, and Hharvest / H swings between about 0.4 and 6.6 over the base run's century
+#'         (H is a difference of terms of either sign, so a small H can sit under a large harvest reset). Read the
+#'         two lines together.
+#'   \item CONVERSION SELECTIVITY: the classes the solve converts out of the pool
+#'         (\code{ov35_secdforest_reduction}) are not a proportional slice of it.
+#'   \item DISTURBANCE RESETS: shifting-cultivation loss moves area from the older classes into the establishment
+#'         classes in the presolve (see the solved-state note above).
+#'   \item MATURATION: youngsecdf area crossing the 20 tC/ha threshold leaves that pool for secdforest.
+#'   \item ESTABLISHMENT: area entering the youngest classes.
+#'   \item AREA-BASIS REVALUATION: E charges area that left or arrived at the POOL-MEAN deficit density dd_t-1,
+#'         while the classes that actually moved differed; this is the mirror image of T and is usually the one
+#'         POSITIVE component.
+#' }
+#' Measured by the audit of 2026-09-20 on the base run (SSP2base_L4gate_ON), secdforest, World 2035, Mt CO2/yr:
+#' H -70.52 = harvest -69.00 + conversion selectivity -13.35 + disturbance resets -15.65 + maturation +0.73 +
+#' establishment 0 + area basis +26.75 (against T = -25.01). Cumulative 2020-2100, Gt CO2: harvest -3.30,
+#' conversion selectivity -2.26, area basis +1.89, disturbance -0.31, maturation +0.51. So H is NOT "dilution by
+#' new area entering the young classes": that would be the establishment term, which is the smallest of the six.
+#'
+#' H = 0 EXACTLY when the pool's age-class composition at t equals the advanced composition of t-1. A
+#' class-PROPORTIONAL area change preserves that composition, so pure ageing with a proportional area change gives
+#' H = 0; a SELECTIVE area change does not, and that residual is the conversion-selectivity and area-basis content
+#' above. H is a composition term, not an area term.
+#'
+#' CONVENTION: G advances all of the previous step's area, including the cohorts the solve cuts during the same
+#' step, so G credits their growth along the curve and H then removes their whole deficit at the current curve.
+#' That growth is 2-3.5 % of G (audit measurement). The alternative - excluding cut cohorts from G - was not
+#' adopted: G stays the clean counterfactual "what the pool's density would have done had nothing but ageing
+#' happened".
+#'
+#' G + H is the former single "foregone growth" term g_t-1 (rho_t - rho_t-1) A_t, so E, F, T and the two
+#' identities are unchanged by the split.
 #' For a pool WITHOUT age classes (primforest, whose deficit sits in acx alone) rhoAdv = rho and H = 0 by
 #' construction: pass \code{C0adv = NULL}.
 #' Spec: fragmentation repo, 05-temporal-accounting/documents/COMMITTED_STOCK_ACCOUNTING.md (section 2 and the
@@ -51,24 +95,30 @@
 #' @param C0adv unreduced carbon of the PREVIOUS step's age distribution advanced by the step's cohort shift and
 #'   evaluated on the current step's unreduced densities (same shape, NA in the first step; Mio tC), from
 #'   \code{.edgeAdvancedC0}. NULL for a pool without age classes, which gives H = 0.
-#' @return list of magpie objects S, E, F, G, H, T (Mio tC per step; flows are per step, not per year)
+#' @param hvC0 unreduced carbon on the area harvested in this step, sum over age classes of rho_ac,t hv_ac,t (same
+#'   shape; Mio tC), from \code{.edgeHarvestC0}. NULL for a pool the model does not clear-cut per age class, which
+#'   gives Hharvest = 0.
+#' @return list of magpie objects S, E, F, G, H, Hharvest, T (Mio tC per step; flows are per step, not per year)
 #' @author Michael Crawford
 #' @keywords internal
 #' @noRd
-.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL) {
+.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL, hvC0 = NULL) {
   div0 <- function(a, b) { r <- a / b; r[!is.finite(r)] <- 0; r }
   dd  <- div0(D, A)
   rho <- div0(C0, A)
   g   <- div0(D, C0)
   lagA <- .edgeLagYears(A)
+  lagG <- .edgeLagYears(g)
   # rhoAdv: the mean unreduced density of the previous step's cohorts, aged one step. Without age classes it is
   # rho itself, so the cohort-turnover term H vanishes and G is the former single foregone-growth term.
   rhoAdv <- if (is.null(C0adv)) rho else div0(C0adv, lagA)
   list(S = D,
        E = (dd - .edgeLagYears(dd)) * A,
        F = (g - .edgeLagYears(g)) * rho * A,
-       G = .edgeLagYears(g) * (rhoAdv - .edgeLagYears(rho)) * A,
-       H = .edgeLagYears(g) * (rho - rhoAdv) * A,
+       G = lagG * (rhoAdv - .edgeLagYears(rho)) * A,
+       H = lagG * (rho - rhoAdv) * A,
+       # the harvest-reset part of H: a sub-term, NOT an addend of E. lagG * 0 keeps the first step NA.
+       Hharvest = if (is.null(hvC0)) lagG * 0 else -lagG * hvC0,
        T = .edgeLagYears(dd) * (A - lagA))
 }
 
@@ -165,4 +215,24 @@
   out <- magclass::dimSums(Aac, dim = 3)
   out[, , ] <- res
   out
+}
+
+#' @title edgeHarvestC0
+#' @description Unreduced carbon on the area clear-cut in this step, sum_ac rho_ac,t hv_ac,t: the basis of the
+#'   harvest-reset part of the cohort-turnover term H. The harvest areas are indexed by the class the area is
+#'   harvested FROM in step t (after the cohort shift), so they pair with the current step's unreduced densities.
+#'   Internal; see .edgeCommittedStockTerms.
+#' @param hvAc harvested area per cluster, step and age class (magpie, cells x years x ac; Mha)
+#' @param rhoAc unreduced vegc density per cluster, step and age class (same shape; tC/ha)
+#' @return magpie object (cells x years x 1; Mio tC)
+#' @author Michael Crawford
+#' @keywords internal
+#' @noRd
+.edgeHarvestC0 <- function(hvAc, rhoAc) {
+  hvAc <- .edgeAcSort(hvAc)
+  rhoAc <- .edgeAcSort(rhoAc)
+  if (!identical(magclass::getNames(hvAc), magclass::getNames(rhoAc))) {
+    stop("reportEmissions (edge, L4): the harvested-area and unreduced-density age classes of a pool do not match")
+  }
+  magclass::dimSums(hvAc * rhoAc, dim = 3)
 }

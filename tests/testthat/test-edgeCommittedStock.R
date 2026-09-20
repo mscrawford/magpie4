@@ -90,9 +90,15 @@ test_that("a changing deficit fraction on a static forest is pure fragmentation-
   list(Aac = Aac, rhoAc = rhoAc, A = A, C0 = C0, D = g * C0)
 }
 
-.acTerms <- function(s, years) {
+.acTerms <- function(s, years, hvMat = NULL) {
   adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, magpie4:::.edgeAcShift(years))
-  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv)
+  hvC0 <- NULL
+  if (!is.null(hvMat)) {
+    hv <- s$Aac * 0
+    for (i in seq_along(years)) hv[, i, ] <- hvMat[i, ]
+    hvC0 <- magpie4:::.edgeHarvestC0(hv, s$rhoAc)
+  }
+  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv, hvC0 = hvC0)
 }
 
 test_that("a clear-cut cohort at constant area is cohort turnover, not foregone growth (known-bug case)", {
@@ -164,4 +170,73 @@ test_that("a pool without age classes has H = 0 and G unchanged", {
   tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)        # C0adv = NULL
   expect_true(all(as.vector(tm$H)[-(1:3)] == 0))
   expect_equal(as.vector(tm$F + tm$G + tm$H)[-(1:3)], as.vector(tm$E)[-(1:3)], tolerance = 1e-12)
+})
+
+# MAJOR-2 of the audit of 2026-09-20: every age-class case above holds the pool's AREA constant, and with
+# A_t = A_t-1 the mutant div0(C0adv, A_t) is indistinguishable from the correct div0(C0adv, A_t-1). The two cases
+# below have A_t != A_t-1 and hand-computed G and H, which is what kills that mutant. They also settle what H is
+# when area changes without harvest: H = 0 only if the area change is class-PROPORTIONAL (it then preserves the
+# age-class composition); a SELECTIVE area change leaves a residual in H, which is the conversion-selectivity and
+# area-basis content of the term. H is a composition term, not an area term.
+#
+# Shared construction, classes ac0 / ac5 / ac10 / acx, k = 1, g = 0.25 in both steps:
+#   t-1: areas (0, 6, 4, 0) Mha, densities (0, 20, 45, 120) tC/ha  -> A_t-1 = 10, rho_t-1 = 30, C0_t-1 = 300
+#   t  : densities (0, 22, 48, 125) tC/ha
+#   advanced areas (0, 0, 6, 4) -> C0adv = 6 * 48 + 4 * 125 = 788, rhoAdv = 788 / 10 = 78.8 tC/ha
+#   G = 0.25 * (78.8 - 30) * A_t = 12.2 A_t in both cases (G does not see rho_t)
+
+test_that("a proportional area change with pure ageing keeps H = 0 (and kills the A_t denominator)", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  A   <- rbind(c(0, 6, 4, 0), c(0, 0, 4.8, 3.2))    # 20 % of the area leaves, taken proportionally from each class
+  rho <- rbind(c(0, 20, 45, 120), c(0, 22, 48, 125))
+  s  <- .acSynth(years, acs, A, rho, c(0.25, 0.25))
+  tm <- .acTerms(s, years)
+  expect_equal(as.vector(s$A)[1], 10, tolerance = 1e-12)        # A_t-1
+  expect_equal(as.vector(s$A)[2], 8, tolerance = 1e-12)         # A_t, so the two denominators differ
+  expect_equal(as.vector(tm$G)[2], 0.25 * (78.8 - 30) * 8, tolerance = 1e-12)   # 97.6
+  expect_equal(as.vector(tm$H)[2], 0, tolerance = 1e-12)
+  expect_equal(as.vector(tm$T)[2], 0.25 * 30 * (8 - 10), tolerance = 1e-12)     # -15, the area part
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$E + tm$T)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+  # the mutant rhoAdv = C0adv / A_t would give 788 / 8 = 98.5, hence G = 137 and H = -39.4
+  expect_false(isTRUE(all.equal(as.vector(tm$G)[2], 0.25 * (98.5 - 30) * 8)))
+})
+
+test_that("a selective area change with pure ageing leaves the conversion residual in H", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  A   <- rbind(c(0, 6, 4, 0), c(0, 0, 6, 2))        # the 2 Mha that leave are taken from acx alone
+  rho <- rbind(c(0, 20, 45, 120), c(0, 22, 48, 125))
+  s  <- .acSynth(years, acs, A, rho, c(0.25, 0.25))
+  tm <- .acTerms(s, years)
+  expect_equal(as.vector(tm$G)[2], 0.25 * (78.8 - 30) * 8, tolerance = 1e-12)   # 97.6, unchanged: G ignores rho_t
+  expect_equal(as.vector(tm$H)[2], 0.25 * (67.25 - 78.8) * 8, tolerance = 1e-12)  # -23.1; rho_t = 538 / 8
+  expect_lt(as.vector(tm$H)[2], 0)                              # old classes left, so the mean density fell
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$E + tm$T)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+  # the mutant denominator A_t would give H = 0.25 * (67.25 - 98.5) * 8 = -62.5
+  expect_false(isTRUE(all.equal(as.vector(tm$H)[2], 0.25 * (67.25 - 98.5) * 8)))
+})
+
+test_that("the harvest-reset sub-term is -g_t-1 sum_ac rho_ac,t hv_ac,t and carries all of H on a clear cut", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "acx")
+  A   <- rbind(c(0, 10), c(4, 6))
+  rho <- rbind(c(0, 100), c(0, 110))
+  hv  <- rbind(c(0, 0), c(0, 4))        # the 4 Mha are harvested OUT OF acx during the step
+  s  <- .acSynth(years, acs, A, rho, c(0.2, 0.2))
+  tm <- .acTerms(s, years, hvMat = hv)
+  expect_equal(as.vector(tm$Hharvest)[2], -0.2 * 110 * 4, tolerance = 1e-12)     # -88
+  expect_equal(as.vector(tm$Hharvest)[2], as.vector(tm$H)[2], tolerance = 1e-12) # nothing else moved
+  expect_true(is.na(as.vector(tm$Hharvest)[1]))
+  # Hharvest is a sub-term of H, never an addend of E
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+})
+
+test_that("Hharvest is zero where the model does not clear-cut per age class", {
+  s <- .synthPool(5)
+  tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)          # C0adv and hvC0 both NULL
+  expect_true(all(as.vector(tm$Hharvest)[-(1:3)] == 0))
+  expect_true(all(is.na(as.vector(tm$Hharvest)[1:3])))
 })

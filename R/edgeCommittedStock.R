@@ -129,67 +129,133 @@
 #'         the shifted SOLVED state (see the solved-state note above). Defined as the residual, so the three sum
 #'         to T'' exactly.
 #' }
-#' For a pool WITHOUT age classes (primforest) the per-cohort terms ARE the pool-level ones: E'' = E, F'' = F,
-#' G'' = G, T'' = T; it has no per-class harvest or reduction export, so its whole T'' is booked as
-#' T''_other and the harvest and conversion sub-lines are 0 (the three still sum to T'' exactly).
+#' A pool WITHOUT age classes (primforest) is a single class, so C0adv = rho_t A_t-1: E'' = (dd_t - dd_t-1) A_t-1
+#' (the previous area, as the definition requires) and T'' = dd_t (A_t - A_t-1) (at the current deficit). H is 0
+#' because rhoAdv reduces to rho. This is NOT the pool-level pair, which sits on A_t and dd_t-1 and so keeps the
+#' interaction (A_t - A_t-1)(dd_t - dd_t-1) in the headline; the default above removes it (audit F1).
+#' Primforest has its own exported harvest and reduction (\code{ov35_hvarea_primforest},
+#' \code{ov35_primforest_reduction}), so its area transfer splits like any other pool: harvest leaving at dd_P,t
+#' with no return (it becomes secondary forest in the establishment classes, which the secdforest pool counts as an
+#' entry under "other transitions"), the non-harvest reduction under conversions, and the shifting-cultivation
+#' disturbance loss (\code{p35_disturbance_loss_primf}, which the reduction excludes because the presolve
+#' subtracts it from \code{pcm_land} first - verified: -dA = reduction + disturbance to 1e-8 Mha) as the residual
+#' under other transitions (audit F2).
+#'
+#' A note on emptied classes and emptied pools (audit F7, corrected by the re-check). E'' charges the aged cohorts
+#' that land in classes the solve then empties within the same step at the pool's g_t, and T'' removes exactly the
+#' same area at the same dd_ac,t, so the pair is consistent and the identities hold: an emptied CLASS needs no
+#' correction. An emptied POOL did: when the solve takes a cluster's whole pool to zero, D_t and C0_t are 0 and
+#' g_t = D_t / C0_t is 0 by the div0 convention, which makes dd_ac,t = 0 for cohorts that were standing at t-1.
+#' The whole deficit release then landed in the HEADLINE (E'' = -D_t-1) with T'' = 0, recording no area movement
+#' although the pool's entire area left. The applied fraction is not arbitrary there - it is exposure-derived and
+#' still defined - so the fix is to take g from \code{p35_degr_applied}, which restores
+#' E'' = g_t C0adv - D_t-1 and T'' = -g_t C0adv. Measured on 2026-09-20: 20 emptied youngsecdf cluster-steps and
+#' one secdforest step (IND.42, y2020) in the base run, one primforest step (SSA.163, y2045) in the price pilot;
+#' World E'' 2020 213.0 -> 215.6 Mt CO2/yr and +0.249 Gt CO2 cumulative 2020-2100.
 #'
 #' @param D committed deficit stock per cluster and step (magpie object, cells x years x 1; Mio tC)
 #' @param A solved area of the pool (same shape; Mha)
 #' @param C0 unreduced carbon of the pool on the solved area, sum over age classes of rho_ac A_ac (same shape; Mio tC)
 #' @param C0adv unreduced carbon of the PREVIOUS step's age distribution advanced by the step's cohort shift and
 #'   evaluated on the current step's unreduced densities (same shape, NA in the first step; Mio tC), from
-#'   \code{.edgeAdvancedC0}. NULL for a pool without age classes, which gives H = 0.
+#'   \code{.edgeAdvancedC0}. For a single-class pool it is rho_ac,t A_t-1 from the EXPORTED class density; if left
+#'   NULL it falls back to (C0_t / A_t) A_t-1, which is the same only while the pool has area.
+#' @param singleClass TRUE for a pool with no age structure (primforest): rhoAdv is then rho exactly, so the
+#'   pool-level cohort turnover H is exactly 0 rather than 0 to rounding.
+#' The pool-level continuity terms (E, F, G, H, Hharvest, T) keep D / C0 by design, so they reproduce the interim
+#' build on every run; only the per-cohort pair and its sub-lines read the exported applied fraction.
+#'
+#' @param g the pool's applied deficit fraction per cluster and step (same shape; dimensionless), from
+#'   \code{p35_degr_applied} at age class \code{acx} - the value is ac-invariant for secdforest and other and is
+#'   carried in \code{acx} alone for primforest, so \code{acx} reads all three. NULL falls back to D / C0, which
+#'   is correct only while the pool has carbon: pass it wherever the export exists. Checked against D / C0 to
+#'   1e-8 wherever C0 > 0, so the export and the stock identity stay tied. Used for the PER-COHORT pair and its
+#'   sub-lines only - the pool-level continuity terms keep D / C0 whatever is passed here.
+#' @param poolName pool label used only in that check's error message
 #' @param hvC0 unreduced carbon on the area harvested in this step, sum over age classes of rho_ac,t hv_ac,t (same
 #'   shape; Mio tC), from \code{.edgeHarvestC0}. NULL for a pool the model does not clear-cut per age class, which
 #'   gives Hharvest = 0.
-#' @param hvArea area clear-cut in this step, sum_ac hv_ac,t (same shape; Mha)
-#' @param rhoEst mean unreduced density of the establishment classes (the first k_t age classes) at t (same shape;
-#'   tC/ha), from \code{.edgeEstRho}: where the clear-cut area re-enters the pool
-#' @param redC0 unreduced carbon on the NON-HARVEST area reduction, sum_ac rho_ac,t (red_ac,t - hv_ac,t) (same
-#'   shape; Mio tC), i.e. the area that genuinely leaves the pool
+#' @param hvBack unreduced carbon the clear-cut area re-enters THIS pool with (same shape; Mio tC): for secdforest
+#'   the establishment-class density times the harvested area (\code{.edgeEstRho} x the area), and NULL or 0
+#'   wherever the harvested area leaves the pool - harvested youngsecdf re-enters othernat
+#'   (\code{q35_other_regeneration}) and harvested primforest is reclassified as secondary forest
+#'   (\code{q35_secdforest_regeneration}), so in both cases nothing comes back
+#' @param redC0 unreduced carbon on the FULL per-class area reduction, sum_ac rho_ac,t red_ac,t (same shape;
+#'   Mio tC). The harvest is subtracted inside this function, not by the caller
 #' @return list of magpie objects S, E, F, G, H, Hharvest, T (pool level) and Epc, Fpc, Gpc, Tpc, TpcHarv,
 #'   TpcConv, TpcOther (per cohort), all Mio tC per step (flows are per step, not per year)
 #' @author Michael Crawford
 #' @keywords internal
 #' @noRd
-.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL, hvC0 = NULL,
-                                     hvArea = NULL, rhoEst = NULL, redC0 = NULL) {
+.edgeCommittedStockTerms <- function(D, A, C0, C0adv = NULL, singleClass = FALSE, g = NULL, poolName = NULL,
+                                     hvC0 = NULL, hvBack = NULL, redC0 = NULL) {
   div0 <- function(a, b) { r <- a / b; r[!is.finite(r)] <- 0; r }
   dd  <- div0(D, A)
   rho <- div0(C0, A)
-  g   <- div0(D, C0)
+  # TWO fractions, deliberately. gRatio = D / C0 is the interim build's pool fraction and the POOL-LEVEL
+  # CONTINUITY terms keep it by design, so they reproduce 09d21e4d on every run; only the per-cohort pair reads the
+  # export (owner's decision, 2026-09-20). gPc is that export where the caller supplies it: D / C0 collapses to 0
+  # by the div0 convention when the solve empties a pool, which would push the whole deficit release of the cohorts
+  # standing at t-1 into E'' and leave T'' = 0 (audit re-check, same class as F1), while p35_degr_applied stays
+  # defined there. The tie between the two is asserted wherever C0 > 0.
+  gRatio <- div0(D, C0)
+  gPc <- gRatio
+  if (!is.null(g)) {
+    dv <- abs(as.array(g) - as.array(gRatio))
+    dv[as.array(C0) <= 0] <- 0
+    if (any(dv > 1e-8, na.rm = TRUE)) {
+      i <- which(dv == max(dv, na.rm = TRUE), arr.ind = TRUE)[1, ]
+      stop(sprintf(paste0("reportEmissions (edge, L4): the exported applied deficit fraction and D / C0 disagree ",
+                          "by %.3g in pool %s, cluster %s, %s"), max(dv, na.rm = TRUE),
+                   if (is.null(poolName)) "(unnamed)" else poolName,
+                   dimnames(dv)[[1]][i[1]], dimnames(dv)[[2]][i[2]]))
+    }
+    gPc <- g
+  }
   lagA <- .edgeLagYears(A)
-  lagG <- .edgeLagYears(g)
+  lagG <- .edgeLagYears(gRatio)     # continuity terms: the interim ratio
+  lagGpc <- .edgeLagYears(gPc)      # per-cohort pair: the exported applied fraction
   lagD <- .edgeLagYears(D)
-  # rhoAdv: the mean unreduced density of the previous step's cohorts, aged one step. Without age classes it is
-  # rho itself, so the cohort-turnover term H vanishes and G is the former single foregone-growth term.
-  rhoAdv <- if (is.null(C0adv)) rho else div0(C0adv, lagA)
+  # A pool without age classes is ONE class, so its advanced distribution is its own previous area at the current
+  # density: C0adv = rho_t A_t-1. Defaulting it here (rather than short-circuiting to the pool-level terms) is what
+  # puts E'' on Atilde and T'' at dd_t for such a pool too - otherwise the headline keeps its Bennet interaction
+  # (A_t - A_t-1)(dd_t - dd_t-1) (audit F1, 2026-09-20: World base 2020 +2.3, 2030 -7.5, 2100 -6.0 Mt CO2/yr).
+  # Every pool now runs the same path; H is still 0 here because rhoAdv reduces to rho.
+  # A single-class pool should be given C0adv = rho_ac,t A_t-1 built from the EXPORTED class density. The fallback
+  # below uses rho = C0_t / A_t, which equals it only while the pool has area: where the solve empties a pool
+  # div0 sends rho_t to 0 and the F'' / G'' split collapses, though E'' + T'' still closes. Pass C0adv explicitly.
+  # (Primforest has 4 such cluster-steps in the SSP2 price pilot, but 3 carry D_t-1 = 0 - no exposure - so only
+  # SSA.163 y2045, 2.6 Mt CO2, is material.)
+  if (is.null(C0adv)) { singleClass <- TRUE; C0adv <- rho * lagA }   # a NULL C0adv can only mean one class
+  # For one class rhoAdv IS rho, so H is exactly 0; div0(C0adv, lagA) would differ by a ULP and leave a
+  # 1e-16-relative H where the invariant is exact.
+  rhoAdv <- if (singleClass) rho else div0(C0adv, lagA)
   out <- list(S = D,
               E = (dd - .edgeLagYears(dd)) * A,
-              F = (g - .edgeLagYears(g)) * rho * A,
+              F = (gRatio - lagG) * rho * A,
               G = lagG * (rhoAdv - .edgeLagYears(rho)) * A,
               H = lagG * (rho - rhoAdv) * A,
               # the harvest-reset part of H: a sub-term, NOT an addend of E. lagG * 0 keeps the first step NA.
-              Hharvest = if (is.null(hvC0)) lagG * 0 else -lagG * hvC0,
+              # Only a pool WITH age classes has a pool-level composition term, so a single-class pool contributes
+              # 0 here as well - its H is identically 0 and this continuity line must stay consistent with it.
+              Hharvest = if (singleClass || is.null(hvC0)) lagG * 0 else -lagG * hvC0,
               T = .edgeLagYears(dd) * (A - lagA))
   # Per-cohort pair. Written so that E'' + T'' = dD cancels the g_t C0adv term EXACTLY in floating point; the
   # F'' + G'' = E'' closure carries one rounding of g_t-1 C0_t-1 against D_t-1 (~1e-16 relative).
-  if (is.null(C0adv)) {
-    zero <- out$E * 0                                    # keeps the first step NA
-    # no per-class harvest or reduction export exists for such a pool, so its whole area transfer is "other"
-    out <- c(out, list(Epc = out$E, Fpc = out$F, Gpc = out$G, Tpc = out$T,
-                       TpcHarv = zero, TpcConv = zero, TpcOther = out$T))
-  } else {
-    Epc <- g * C0adv - lagD
-    Tpc <- D - g * C0adv
-    harv <- if (is.null(hvC0) || is.null(hvArea) || is.null(rhoEst)) Tpc * 0 else g * (rhoEst * hvArea - hvC0)
-    conv <- if (is.null(redC0)) Tpc * 0 else -g * redC0
-    out <- c(out, list(Epc = Epc,
-                       Fpc = (g - lagG) * C0adv,
-                       Gpc = lagG * (C0adv - .edgeLagYears(C0)),
-                       Tpc = Tpc,
-                       TpcHarv = harv, TpcConv = conv, TpcOther = Tpc - harv - conv))
-  }
+  Epc <- gPc * C0adv - lagD
+  Tpc <- D - gPc * C0adv
+  zero <- Tpc * 0                                        # keeps the first step NA
+  hvOut <- if (is.null(hvC0)) zero else hvC0
+  # The harvest sub-line: area leaves its class at that class's deficit and re-enters the pool with hvBack (0 where
+  # the harvested area leaves the pool altogether). The harvest is SUBTRACTED from the reduction here, inside the
+  # term, so a caller cannot forget it: the per-class reduction exports bound the harvest from above (audit F3).
+  harv <- if (is.null(hvC0) && is.null(hvBack)) zero else gPc * ((if (is.null(hvBack)) zero else hvBack) - hvOut)
+  conv <- if (is.null(redC0)) zero else -gPc * (redC0 - hvOut)
+  out <- c(out, list(Epc = Epc,
+                     Fpc = (gPc - lagGpc) * C0adv,
+                     Gpc = lagGpc * (C0adv - .edgeLagYears(C0)),
+                     Tpc = Tpc,
+                     TpcHarv = harv, TpcConv = conv, TpcOther = Tpc - harv - conv))
   out
 }
 

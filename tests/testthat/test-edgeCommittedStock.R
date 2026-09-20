@@ -87,7 +87,7 @@ test_that("a changing deficit fraction on a static forest is pure fragmentation-
   C0 <- magclass::dimSums(Aac * rhoAc, dim = 3)
   g  <- new.magpie(cell, years, NULL, fill = 0)
   g[, , ] <- gvec
-  list(Aac = Aac, rhoAc = rhoAc, A = A, C0 = C0, D = g * C0)
+  list(Aac = Aac, rhoAc = rhoAc, A = A, C0 = C0, D = g * C0, g = g)
 }
 
 .acMat <- function(s, years, m) {
@@ -96,22 +96,22 @@ test_that("a changing deficit fraction on a static forest is pure fragmentation-
   x
 }
 
-.acTerms <- function(s, years, hvMat = NULL, redMat = NULL) {
+.acTerms <- function(s, years, hvMat = NULL, redMat = NULL, back = TRUE, useG = FALSE) {
   shift <- magpie4:::.edgeAcShift(years)
   adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, shift)
-  hvC0 <- NULL; hvArea <- NULL; rhoEst <- NULL; redC0 <- NULL
+  hvC0 <- NULL; hvBack <- NULL; redC0 <- NULL
   hv <- if (is.null(hvMat)) NULL else .acMat(s, years, hvMat)
   if (!is.null(hv)) {
     hvC0 <- magpie4:::.edgeHarvestC0(hv, s$rhoAc)
-    hvArea <- magclass::dimSums(hv, dim = 3)
-    rhoEst <- magpie4:::.edgeEstRho(s$rhoAc, shift)
+    # back = the harvested area re-enters this pool over its establishment classes (secdforest); FALSE where it
+    # leaves the pool (youngsecdf -> othernat, primforest -> secondary forest): audit F6
+    if (back) hvBack <- magpie4:::.edgeEstRho(s$rhoAc, shift) * magclass::dimSums(hv, dim = 3)
   }
-  if (!is.null(redMat)) {
-    red <- .acMat(s, years, redMat)
-    redC0 <- magpie4:::.edgeHarvestC0(red - (if (is.null(hv)) red * 0 else hv), s$rhoAc)
-  }
-  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv, hvC0 = hvC0,
-                                     hvArea = hvArea, rhoEst = rhoEst, redC0 = redC0)
+  # redMat is the FULL per-class reduction; the harvest subtraction lives inside .edgeCommittedStockTerms (audit F3)
+  if (!is.null(redMat)) redC0 <- magpie4:::.edgeHarvestC0(.acMat(s, years, redMat), s$rhoAc)
+  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv,
+                                     g = if (useG) s$g else NULL, poolName = if (useG) "testpool" else NULL,
+                                     hvC0 = hvC0, hvBack = hvBack, redC0 = redC0)
 }
 
 test_that("a clear-cut cohort at constant area is cohort turnover, not foregone growth (known-bug case)", {
@@ -335,14 +335,137 @@ test_that("a 10-year step advances two classes and establishes over ac0 and ac5"
   expect_equal(as.vector(tc$Epc + tc$Tpc)[2], as.vector(cut$D)[2] - as.vector(cut$D)[1], tolerance = 1e-10)
 })
 
-test_that("a pool without age classes keeps the pool-level terms and books all of T'' as other transitions", {
+test_that("a single-class pool puts E'' on the previous area and T'' at the current deficit (audit F1)", {
+  # One class means Atilde = A_t-1, so E'' = (dd_t - dd_t-1) A_t-1 and T'' = dd_t (A_t - A_t-1). The POOL-LEVEL
+  # pair sits on A_t and dd_t-1 instead and so keeps the interaction (A_t - A_t-1)(dd_t - dd_t-1) in the headline;
+  # this test is what stops the terms function short-circuiting back to it.
   s <- .synthPool(6)
   tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)   # no per-age-class inputs at all
+  lag <- magpie4:::.edgeLagYears
+  dd <- s$D / s$A; dd[!is.finite(dd)] <- 0                               # dd_ac,t on the single class
   k <- -(1:3)
-  expect_equal(as.vector(tm$Epc)[k], as.vector(tm$E)[k], tolerance = 1e-12)
-  expect_equal(as.vector(tm$Tpc)[k], as.vector(tm$T)[k], tolerance = 1e-12)
-  expect_equal(as.vector(tm$TpcOther)[k], as.vector(tm$Tpc)[k], tolerance = 1e-12)
-  expect_true(all(as.vector(tm$TpcHarv)[k] == 0), all(as.vector(tm$TpcConv)[k] == 0))
+  expect_equal(as.vector(tm$Epc)[k], as.vector((dd - lag(dd)) * lag(s$A))[k], tolerance = 1e-9)
+  expect_equal(as.vector(tm$Tpc)[k], as.vector(dd * (s$A - lag(s$A)))[k], tolerance = 1e-9)
+  expect_true(all(as.vector(tm$H)[k] == 0))                              # rhoAdv reduces to rho
+  # and it is NOT the pool-level pair wherever the area moves: the difference is exactly the interaction
+  inter <- (s$A - lag(s$A)) * (dd - lag(dd))
+  expect_equal(as.vector(tm$E - tm$Epc)[k], as.vector(inter)[k], tolerance = 1e-9)
+  expect_equal(as.vector(tm$Tpc - tm$T)[k], as.vector(inter)[k], tolerance = 1e-9)
+  expect_false(isTRUE(all.equal(as.vector(tm$Epc)[k], as.vector(tm$E)[k])))
+  expect_equal(as.vector(tm$TpcOther)[k], as.vector(tm$Tpc)[k], tolerance = 1e-12)   # no harvest / reduction given
+  expect_true(all(as.vector(tm$TpcHarv)[k] == 0))                        # audit F8: assert BOTH conditions
+  expect_true(all(as.vector(tm$TpcConv)[k] == 0))
   expect_equal(as.vector(tm$Fpc + tm$Gpc)[k], as.vector(tm$Epc)[k], tolerance = 1e-10)
   expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[k], as.vector(tm$Tpc)[k], tolerance = 1e-12)
+})
+
+test_that("with g changing, F'' carries the interaction, G'' the previous exposure and T'' the current one", {
+  # audit F3: every fixture above holds g constant, which makes F'' = 0 and lagG = g and so hides three mutants.
+  # Shared: classes ac0/ac5/ac10/acx, k = 1, g_t-1 = 0.20 -> g_t = 0.30.
+  #   t-1 areas (0, 6, 4, 0), densities (0, 20, 45, 120)  -> A_t-1 = 10, C0_t-1 = 300, D_t-1 = 60
+  #   t densities (0, 22, 48, 125); advanced areas (0, 0, 6, 4) -> C0adv = 6*48 + 4*125 = 788
+  #   E'' = 0.30 * 788 - 60 = 176.4 ; F'' = (0.30 - 0.20) * 788 = 78.8 ; G'' = 0.20 * (788 - 300) = 97.6
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  rho   <- rbind(c(0, 20, 45, 120), c(0, 22, 48, 125))
+  prev  <- c(0, 6, 4, 0)
+  gg    <- c(0.20, 0.30)
+  chk <- function(tm, Tref) {
+    expect_equal(as.vector(tm$Epc)[2], 176.4, tolerance = 1e-10)
+    expect_equal(as.vector(tm$Fpc)[2], 78.8, tolerance = 1e-10)    # interaction in F'': at the CURRENT density
+    expect_equal(as.vector(tm$Gpc)[2], 97.6, tolerance = 1e-10)    # at the PREVIOUS exposure
+    expect_equal(as.vector(tm$Fpc + tm$Gpc)[2], as.vector(tm$Epc)[2], tolerance = 1e-10)
+    expect_equal(as.vector(tm$Tpc)[2], Tref, tolerance = 1e-10)
+    expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[2], as.vector(tm$Tpc)[2], tolerance = 1e-10)
+  }
+  # (i) pure ageing, no area change: T'' = 0
+  aged <- .acSynth(years, acs, rbind(prev, c(0, 0, 6, 4)), rho, gg)
+  chk(.acTerms(aged, years), 0)
+  expect_equal(as.vector(aged$D)[2] - as.vector(aged$D)[1], as.vector(.acTerms(aged, years)$Epc)[2], tolerance = 1e-10)
+  # (ii) 2 Mha of acx converted out: T'' = g_t (C0_t - C0adv) = 0.30 * (538 - 788) = -75, NOT g_t-1 x that (-50)
+  sel <- .acSynth(years, acs, rbind(prev, c(0, 0, 6, 2)), rho, gg)
+  ts <- .acTerms(sel, years, redMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 2)))
+  chk(ts, -75)
+  expect_false(isTRUE(all.equal(as.vector(ts$Tpc)[2], 0.20 * (538 - 788))))
+  expect_equal(as.vector(ts$TpcConv)[2], -75, tolerance = 1e-10)
+  expect_equal(as.vector(ts$Epc + ts$Tpc)[2], as.vector(sel$D)[2] - as.vector(sel$D)[1], tolerance = 1e-10)
+  # (iii) 3 Mha leave acx, of which 1 Mha is harvested and re-established in ac0: the conversion sub-line must use
+  # red - hv (-75), not the full reduction (-112.5), and the harvest sub-line takes the rest (-37.5)
+  mix <- .acSynth(years, acs, rbind(prev, c(1, 0, 6, 1)), rho, gg)
+  tm <- .acTerms(mix, years, hvMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 1)),
+                 redMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 3)))
+  chk(tm, -112.5)
+  expect_equal(as.vector(tm$TpcConv)[2], -75, tolerance = 1e-10)
+  expect_false(isTRUE(all.equal(as.vector(tm$TpcConv)[2], -112.5)))       # kills "conversions = full reduction"
+  expect_equal(as.vector(tm$TpcHarv)[2], -37.5, tolerance = 1e-10)        # g_t (0 - rho_acx,t) x 1 Mha
+  expect_equal(as.vector(tm$TpcOther)[2], 0, tolerance = 1e-10)
+  expect_equal(as.vector(tm$Epc + tm$Tpc)[2], as.vector(mix$D)[2] - as.vector(mix$D)[1], tolerance = 1e-10)
+})
+
+test_that("where harvested area leaves the pool, the harvest sub-line has no arrival term (audit F6)", {
+  # harvested youngsecdf re-enters othernat (q35_other_regeneration) and harvested primforest is reclassified as
+  # secondary forest, so neither returns to its own pool: back = FALSE drops the arrival.
+  years <- c("y2060", "y2070")                      # a 10-yr step, where the arrival would be rho_ac5 / 2 > 0
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  rho   <- rbind(c(1, 2, 3, 4), c(10, 20, 30, 40))
+  s <- .acSynth(years, acs, rbind(c(2, 3, 4, 1), c(1.5, 1.5, 2, 5)), rho, c(0.1, 0.1))
+  hv <- rbind(c(0, 0, 0, 0), c(0, 0, 0, 3))
+  withBack <- .acTerms(s, years, hvMat = hv, redMat = hv, back = TRUE)
+  noBack   <- .acTerms(s, years, hvMat = hv, redMat = hv, back = FALSE)
+  expect_equal(as.vector(withBack$TpcHarv)[2], 0.1 * (15 * 3 - 3 * 40), tolerance = 1e-10)   # -7.5
+  expect_equal(as.vector(noBack$TpcHarv)[2], 0.1 * (0 - 3 * 40), tolerance = 1e-10)          # -12.0
+  expect_equal(as.vector(withBack$Tpc)[2], as.vector(noBack$Tpc)[2], tolerance = 1e-12)      # T'' itself unchanged
+  for (tm in list(withBack, noBack)) {
+    expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[2], as.vector(tm$Tpc)[2], tolerance = 1e-10)
+  }
+})
+
+# ---------------------------------------------------------------------------------------------------------------
+# The pool's applied deficit fraction (audit re-check of 2026-09-20, same class as F1: area movement leaking into
+# the headline). Where the solve empties a cluster's WHOLE pool, D_t = C0_t = 0 and div0 sends D_t / C0_t to 0, so
+# dd_ac,t = 0 for the cohorts that were standing at t-1: the entire deficit release appeared as E'' = -D_t-1 with
+# T'' = 0, recording no area movement although all the area left. p35_degr_applied stays defined there.
+
+test_that("an emptied pool books its release as area transfer when the applied fraction is supplied", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "acx")
+  A   <- rbind(c(0, 10), c(0, 0))          # the solve takes the whole pool to zero
+  rho <- rbind(c(0, 100), c(0, 110))
+  s <- .acSynth(years, acs, A, rho, c(0.2, 0.3))
+  # A_t-1 = 10, C0_t-1 = 1000, D_t-1 = 200; advanced areas (0, 10) -> C0adv = 1100; A_t = C0_t = D_t = 0
+  expect_equal(as.vector(s$D)[1], 200, tolerance = 1e-12)
+  expect_equal(as.vector(s$D)[2], 0, tolerance = 1e-12)
+  tm <- .acTerms(s, years, useG = TRUE)
+  expect_equal(as.vector(tm$Epc)[2], 0.3 * 1100 - 200, tolerance = 1e-10)   # 130: the cohorts' own deficit change
+  expect_equal(as.vector(tm$Tpc)[2], -0.3 * 1100, tolerance = 1e-10)        # -330: all the area left
+  expect_equal(as.vector(tm$Fpc)[2], (0.3 - 0.2) * 1100, tolerance = 1e-10) # 110
+  expect_equal(as.vector(tm$Gpc)[2], 0.2 * (1100 - 1000), tolerance = 1e-10) # 20
+  expect_equal(as.vector(tm$Fpc + tm$Gpc)[2], as.vector(tm$Epc)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$Epc + tm$Tpc)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+  # the div0 fallback is what the defect looked like: the whole release in the headline, no area movement at all
+  fb <- .acTerms(s, years, useG = FALSE)
+  expect_equal(as.vector(fb$Epc)[2], -200, tolerance = 1e-10)
+  expect_equal(as.vector(fb$Tpc)[2], 0, tolerance = 1e-10)
+  expect_false(isTRUE(all.equal(as.vector(tm$Epc)[2], as.vector(fb$Epc)[2])))
+  expect_equal(as.vector(fb$Epc + fb$Tpc)[2], as.vector(tm$Epc + tm$Tpc)[2], tolerance = 1e-10)  # both close
+})
+
+test_that("a supplied applied fraction that disagrees with D / C0 is refused", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "acx")
+  s <- .acSynth(years, acs, rbind(c(0, 10), c(0, 8)), rbind(c(0, 100), c(0, 110)), c(0.2, 0.2))
+  adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, magpie4:::.edgeAcShift(years))
+  bad <- s$g
+  bad[, 2, ] <- 0.25                                      # the pool has carbon at t, so this must be caught
+  expect_error(magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv,
+                                                 g = bad, poolName = "testpool"),
+               "applied deficit fraction and D / C0 disagree.*testpool")
+  # the same disagreement on a step where the pool has NO carbon is not an error: D / C0 is undefined there
+  ok <- s$g
+  s2 <- .acSynth(years, acs, rbind(c(0, 10), c(0, 0)), rbind(c(0, 100), c(0, 110)), c(0.2, 0.2))
+  ok[, 2, ] <- 0.9
+  expect_silent(magpie4:::.edgeCommittedStockTerms(D = s2$D, A = s2$A, C0 = s2$C0,
+                                                  C0adv = magpie4:::.edgeAdvancedC0(s2$Aac, s2$rhoAc,
+                                                                                    magpie4:::.edgeAcShift(years)),
+                                                  g = ok, poolName = "testpool"))
 })

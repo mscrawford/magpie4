@@ -42,9 +42,9 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Foregone growth | Mt CO2/yr | G'' = sum_ac Atilde_ac,t g_t-1 (rho_ac,t - rho_src(ac),t-1): each cohort's growth along its own curve at the previous step's exposure. Fragmentation-driven + Foregone growth = Edge degradation exactly. Unlike the interim pool-level split this carries no cohort turnover: harvest resets and conversion selectivity are area movements and sit in Area transfer
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Committed stock | Mt CO2 | Committed edge carbon deficit on the solved natural forest (primforest, secdforest, youngsecdf and the natural-curve ndc/aff afforestation pools); a stock, not a flow
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer | Mt CO2/yr | T'' = sum_ac dd_ac,t (A_ac,t - Atilde_ac,t): every per-class area change at the class's OWN deficit density - harvest resets, conversions in and out, disturbance resets, establishment. Edge degradation + Area transfer = the change of the committed stock, exactly. Not an emission line: that carbon is booked in land-use change at reduced density
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Harvest resets | Mt CO2/yr | Informational sub-line of Area transfer, no +: the clear-cut reset, g_t (rhoEst_t hvArea_t - sum_ac rho_ac,t hv_ac,t). Harvested area leaves its class at that class's deficit and re-enters the pool in the establishment classes (the first k_t classes, equally, as GAMS spreads it), so it is area-neutral for the pool and invisible to the pool-level Area transfer
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Conversions | Mt CO2/yr | Informational sub-line of Area transfer, no +: area genuinely leaving the pool, -g_t sum_ac rho_ac,t (red_ac,t - hv_ac,t) from the per-class reduction exports. The harvest is subtracted because the reduction bounds it from above, so counting both would double-count the leaving side
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Other transitions | Mt CO2/yr | Informational sub-line of Area transfer, no +, defined as the residual Area transfer minus Harvest resets minus Conversions, so the three sum exactly: establishment from other sources (reclassified primforest harvest, restoration), youngsecdf maturation, conversions in, the shifting-cultivation disturbance redistribution, and the whole Area transfer of the afforestation pools (no per-class harvest or reduction export exists for them)
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Harvest resets | Mt CO2/yr | Informational sub-line of Area transfer, no +: the clear-cut reset, g_t (hvBack_t - sum_ac rho_ac,t hv_ac,t) over every pool with an exported harvest. Secondary forest is re-established over the first k_t age classes and so partly comes back; harvested primforest (reclassified as secondary forest) and harvested young secondary forest (which re-enters othernat) do not, so for those pools the whole harvested deficit leaves
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Conversions | Mt CO2/yr | Informational sub-line of Area transfer, no +: area genuinely leaving a pool, -g_t sum_ac rho_ac,t (red_ac,t - hv_ac,t) from the per-class reduction exports of secdforest and youngsecdf and the scalar reduction of primforest. The harvest is subtracted because the reduction bounds it from above, so counting both would double-count the leaving side
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Other transitions | Mt CO2/yr | Informational sub-line of Area transfer, no +, defined as the residual Area transfer minus Harvest resets minus Conversions, so the three sum exactly. It holds: the shifting-cultivation disturbance loss of primforest and secdforest (the presolve moves that area into the establishment classes before the reduction is formed, so no reduction export covers it), entries into a pool - restoration, maturation of youngsecdf into secdforest, and the establishment classes that receive reclassified primforest harvest - and the whole area transfer of the afforestation pools, for which no per-class harvest or reduction export exists
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Pool-level E | Mt CO2/yr | Continuity line, no +, not part of any sum: the POOL-LEVEL edge emission (dd_t - dd_t-1) A_t of the interim build, kept so the record can compare the two definitions. It charges area leaving at the pool-mean deficit and therefore contains the mirror of Area transfer and the selection of which classes were converted; Edge degradation (per cohort) differs from it by Area transfer minus the pool-level Area transfer
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Pool-level E\|Cohort turnover | Mt CO2/yr | Continuity line, no +: the cohort-turnover term H = g_t-1 (rho_t - rhoAdv_t) A_t of the interim pool-level split, the pool-level symptom of the composition change that the per-cohort definition now books in Area transfer
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Pool-level E\|Cohort turnover\|Harvest resets | Mt CO2/yr | Continuity line, no +: the harvest-reset part of the pool-level cohort turnover, -g_t-1 sum_ac rho_ac,t hv_ac,t
@@ -748,6 +748,9 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
     hvOther <- .lvl("ov35_hvarea_other")                         # (j, t, othertype35.ac)    Mha
     redSecd <- .lvl("ov35_secdforest_reduction")                 # (j, t, ac)                Mha
     redOther <- .lvl("ov35_other_reduction")                     # (j, t, othertype35.ac)    Mha
+    hvPrim  <- .lvl("ov35_hvarea_primforest")                    # (j, t)                    Mha
+    redPrim <- .lvl("ov35_primforest_reduction")                 # (j, t)                    Mha
+    applied <- .par("p35_degr_applied")                          # (j, t, land_timber.ac.degr35)  fraction
     unredP  <- .par("p35_vegc_unreduced_primforest")             # (j, t)                    tC/ha
     unredS  <- .par("p35_vegc_unreduced_secdforest")             # (j, t, ac)                tC/ha
     unredY  <- .par("p35_vegc_unreduced_youngsecdf")             # (j, t, ac)                tC/ha
@@ -777,31 +780,48 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
       # "other" in the export is youngsecdf (othernat is never reduced); primforest sits in age class acx.
       youngA <- collapseNames(otherL[, , "youngsecdf"])
       youngHv <- collapseNames(hvOther[, , "youngsecdf"])
+      primA <- collapseNames(landL[, , "primforest"])
+      # The applied deficit fraction as the model set it. It is ac-invariant for secdforest and "other" and lives
+      # in acx alone for primforest (verified on both gate runs), so acx reads all three; it stays defined where a
+      # cluster's pool is emptied, which D / C0 does not (see .edgeCommittedStockTerms).
+      .gApp <- function(tp) collapseNames(applied[, , d][, , tp][, , "acx"])
       pools <- list(
-        # primforest sits in acx alone, so it has no age structure: C0adv = NULL gives H = 0 by construction
+        # primforest sits in acx alone: one class, so C0adv defaults to rho_t A_t-1 inside the terms function and
+        # H = 0 by construction. It has its own harvest and reduction exports, and the harvested area leaves the
+        # pool (reclassified as secondary forest), so hvBack is NULL.
         primforest = .edgeCommittedStockTerms(
           D  = dimSums(Dd[, , "primforest"], dim = 3),
-          A  = collapseNames(landL[, , "primforest"]),
-          C0 = collapseNames(unredP * landL[, , "primforest"]),
-          C0adv = NULL),
+          A  = primA,
+          C0 = collapseNames(unredP * primA),
+          # one class: Atilde = A_t-1 at the exported density (NOT C0_t / A_t, which is 0 where the solve empties
+          # the pool in a cluster and would collapse the F'' / G'' split there)
+          C0adv = collapseNames(unredP * .edgeLagYears(primA)),
+          singleClass = TRUE,
+          g = .gApp("primforest"), poolName = "primforest",
+          hvC0 = collapseNames(unredP * hvPrim),
+          hvBack = NULL,
+          redC0 = collapseNames(unredP * redPrim)),
         secdforest = .edgeCommittedStockTerms(
           D  = dimSums(Dd[, , "secdforest"], dim = 3),
           A  = dimSums(secdL, dim = 3),
           C0 = dimSums(unredS * secdL, dim = 3),
           C0adv = .edgeAdvancedC0(secdL, unredS, acShift),
+          g = .gApp("secdforest"), poolName = "secdforest",
           hvC0 = .edgeHarvestC0(hvSecd, unredS),
-          hvArea = dimSums(hvSecd, dim = 3),
-          rhoEst = .edgeEstRho(unredS, acShift),
-          redC0 = .edgeHarvestC0(redSecd - hvSecd, unredS)),
+          # harvested secondary forest stays secondary forest, re-established over the first k_t classes
+          hvBack = .edgeEstRho(unredS, acShift) * dimSums(hvSecd, dim = 3),
+          redC0 = .edgeHarvestC0(redSecd, unredS)),
         youngsecdf = .edgeCommittedStockTerms(
           D  = dimSums(Dd[, , "other"], dim = 3),
           A  = dimSums(otherL[, , "youngsecdf"], dim = 3),
           C0 = dimSums(unredY * youngA, dim = 3),
           C0adv = .edgeAdvancedC0(youngA, unredY, acShift),
+          g = .gApp("other"), poolName = "youngsecdf",
           hvC0 = .edgeHarvestC0(youngHv, unredY),
-          hvArea = dimSums(youngHv, dim = 3),
-          rhoEst = .edgeEstRho(unredY, acShift),
-          redC0 = .edgeHarvestC0(collapseNames(redOther[, , "youngsecdf"]) - youngHv, unredY)))
+          # harvested young secondary forest re-enters OTHERNAT, not youngsecdf (q35_other_regeneration), so
+          # nothing comes back into this pool (audit F6)
+          hvBack = NULL,
+          redC0 = .edgeHarvestC0(collapseNames(redOther[, , "youngsecdf"]), unredY)))
       if (!is.null(committed32)) {
         for (p in intersect(c("ndc", "aff"), getNames(committed32, dim = 1))) {
           a32 <- collapseNames(for32L[, , p])
@@ -811,9 +831,11 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE,
             A  = dimSums(for32L[, , p], dim = 3),
             C0 = dimSums(rho32 * a32, dim = 3),
             C0adv = .edgeAdvancedC0(a32, rho32, acShift),
+            # 32_forestry exports no applied fraction, so these two keep the D / C0 fallback
+            g = NULL, poolName = paste0("forestry_", p),
             # the afforestation pools are not clear-cut and have no per-class reduction export, so their whole T''
             # sits in "other transitions" (no ov32_hvarea / ov32_land_reduction per age class in the gdx)
-            hvC0 = NULL, hvArea = NULL, rhoEst = NULL, redC0 = NULL)
+            hvC0 = NULL, hvBack = NULL, redC0 = NULL)
         }
       }
       terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", H = "H", Hharvest = "Hharvest", T = "T",

@@ -68,3 +68,100 @@ test_that("a changing deficit fraction on a static forest is pure fragmentation-
   expect_equal(as.vector(tm$G)[-1], rep(0, 5), tolerance = 1e-12)
   expect_equal(as.vector(tm$F)[-1], rep(0.05 * 100 * 10, 5), tolerance = 1e-12)   # dg * rho * A
 })
+
+# ---------------------------------------------------------------------------------------------------------------
+# The cohort-consistent ageing / cohort-turnover split of G (added 2026-09-20; spec amendment of that date, build
+# record L4_BUILD_2026-09-19.md sections 9.1 (a) and 10 finding A2-1). Before the split, rho being an area-weighted
+# mean over age classes meant any within-pool composition change at constant area was booked as a density change and
+# landed in G "foregone growth": clear-cut harvest resets cohorts from acx to ac0 without moving area, so G absorbed
+# the released deficit as NEGATIVE growth. G is now the cohort-consistent ageing term and H the turnover.
+
+.acSynth <- function(years, acs, Amat, rhoMat, gvec, cell = "LAM.1") {
+  Aac   <- new.magpie(cell, years, acs, fill = 0)
+  rhoAc <- new.magpie(cell, years, acs, fill = 0)
+  for (i in seq_along(years)) {
+    Aac[, i, ]   <- Amat[i, ]
+    rhoAc[, i, ] <- rhoMat[i, ]
+  }
+  A  <- magclass::dimSums(Aac, dim = 3)
+  C0 <- magclass::dimSums(Aac * rhoAc, dim = 3)
+  g  <- new.magpie(cell, years, NULL, fill = 0)
+  g[, , ] <- gvec
+  list(Aac = Aac, rhoAc = rhoAc, A = A, C0 = C0, D = g * C0)
+}
+
+.acTerms <- function(s, years) {
+  adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, magpie4:::.edgeAcShift(years))
+  magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0, C0adv = adv)
+}
+
+test_that("a clear-cut cohort at constant area is cohort turnover, not foregone growth (known-bug case)", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "acx")
+  # 4 of 10 Mha clear-cut out of acx into ac0: the pool's AREA does not move, so T is blind to it
+  A   <- rbind(c(0, 10), c(4, 6))
+  # the standing (unharvested) cohort gains 10 tC/ha along the curve; a freshly cut class carries no carbon
+  rho <- rbind(c(0, 100), c(0, 110))
+  s  <- .acSynth(years, acs, A, rho, c(0.2, 0.2))
+  tm <- .acTerms(s, years)
+  released <- 0.2 * 110 * 4     # g_t-1 * rho_acx,t * harvested area: the deficit the cut cohort released
+  expect_lt(as.vector(tm$H)[2], 0)
+  expect_equal(as.vector(tm$H)[2], -released, tolerance = 1e-12)
+  expect_equal(as.vector(tm$G)[2], 0.2 * (110 - 100) * 10, tolerance = 1e-12)  # the surviving cohort's growth only
+  # the defect this test pins: the former single term (= G + H) books the whole composition change as NEGATIVE growth
+  oldG <- as.vector(tm$G + tm$H)[2]
+  expect_equal(oldG, 0.2 * (66 - 100) * 10, tolerance = 1e-12)                 # rho_t = 6 * 110 / 10 = 66 tC/ha
+  expect_lt(oldG, 0)
+  # (c) the identities
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$E + tm$T)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+})
+
+test_that("pure ageing (no harvest, no area change) gives H = 0 exactly", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "ac15", "acx")
+  A   <- rbind(c(0, 6, 4, 0, 0), c(0, 0, 6, 4, 0))   # every cohort advances exactly one class
+  rho <- rbind(c(0, 20, 45, 70, 120), c(0, 22, 48, 74, 125))
+  s  <- .acSynth(years, acs, A, rho, c(0.25, 0.25))
+  tm <- .acTerms(s, years)
+  expect_equal(as.vector(tm$H)[2], 0, tolerance = 1e-12)
+  expect_equal(as.vector(tm$G)[2], as.vector(tm$G + tm$H)[2], tolerance = 1e-12)  # identical to the former term
+  expect_equal(as.vector(tm$G)[2], 0.25 * (58.4 - 30) * 10, tolerance = 1e-12)    # rho_t 58.4, rho_t-1 30 tC/ha
+  # (c) the identities
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[2], as.vector(tm$E)[2], tolerance = 1e-10)
+  expect_equal(as.vector(tm$E + tm$T)[2], as.vector(s$D)[2] - as.vector(s$D)[1], tolerance = 1e-10)
+})
+
+test_that("the cohort shift mirrors GAMS: one class per 5-yr step, two per 10-yr step, acx collects the overflow", {
+  expect_equal(magpie4:::.edgeAcShift(c("y2050", "y2055", "y2060", "y2070", "y2080")),
+               c(NA, 1L, 1L, 2L, 2L))
+  years <- c("y2060", "y2070")                       # a 10-yr step: two classes advance
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  A   <- rbind(c(2, 3, 4, 1), c(0, 0, 0, 10))
+  rho <- rbind(c(1, 2, 3, 4), c(10, 20, 30, 40))
+  s   <- .acSynth(years, acs, A, rho, c(0.1, 0.1))
+  adv <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, magpie4:::.edgeAcShift(years))
+  # advanced areas: ac10 = 2 (from ac0), acx = 3 + 4 + 1 = 8 (ac5 shifted in, ac10 and acx collected); total 10
+  expect_equal(as.vector(adv)[2], 2 * 30 + 8 * 40, tolerance = 1e-12)
+  expect_true(is.na(as.vector(adv)[1]))
+})
+
+test_that("age classes are read in set order whatever the order of the third dimension", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  A   <- rbind(c(1, 2, 3, 4), c(2, 1, 4, 3))
+  rho <- rbind(c(5, 15, 40, 90), c(6, 16, 42, 95))
+  s <- .acSynth(years, acs, A, rho, c(0.15, 0.15))
+  shift <- magpie4:::.edgeAcShift(years)
+  ref  <- magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, shift)
+  perm <- c("acx", "ac10", "ac0", "ac5")
+  scr  <- magpie4:::.edgeAdvancedC0(s$Aac[, , perm], s$rhoAc[, , perm], shift)
+  expect_equal(as.vector(scr), as.vector(ref), tolerance = 1e-12)
+})
+
+test_that("a pool without age classes has H = 0 and G unchanged", {
+  s <- .synthPool(4)
+  tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0)        # C0adv = NULL
+  expect_true(all(as.vector(tm$H)[-(1:3)] == 0))
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[-(1:3)], as.vector(tm$E)[-(1:3)], tolerance = 1e-12)
+})

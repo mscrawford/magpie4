@@ -69,11 +69,22 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     #     identically, and that identity is what makes the reconstructed level exact.
     #   * the natural-origin DENSITY becomes uncal * f, so the haircut sits on BOTH curves. The gap
     #     cal - uncal * f then satisfies  area * cal - s * area * gap == area * blend  identically, so the
-    #     stock matches ov_carbon_stock to gdx precision (measured 1.9e-07 MtC) while every flux term stays
-    #     in the channel the pre-fix code put it in (Indirect moves by < 2 Mt CO2/yr).
+    #     stock matches ov_carbon_stock to gdx precision (measured 1.9e-07 MtC) while the composition drift
+    #     (~300 Mt CO2/yr by 2100) stays in the channel the pre-fix code put it in.
     #   * where the gap vanishes (cal == uncal * f: an age class with no calibration difference -- 3600 of
     #     223200 cluster-ac-steps, 1.6 %, the ac0 class on both gate runs) s is 0/0 and the postsolve share
     #     is used instead. The level is insensitive to the choice there because the gap it multiplies is 0.
+    #
+    # Indirect does NOT return to the pre-fix value bit for bit: it differs by up to 4.42 Mt CO2/yr World
+    # (edge ON, 2100; <= 1.7 in every other year) and 0.43 (edge OFF, 2100). That residue is CORRECT, not an
+    # alignment artefact. It is exactly the change in this block's cc + interaction correction,
+    #     -(corr_new - corr_pre),   corr = sum_ac [ nat * tDiff(gap) + tDiff(nat) * tDiff(gap) ],
+    # which reconstructs the measured year-by-year deviation to 0.000 on both runs. Splitting it by input:
+    # edge ON 2100 is +4.434 from the GAP (the haircut f) and -0.013 from the natural AREA; edge OFF, where
+    # f == 1, is +0.433 from the area alone and 0.000 from the gap. The gap part is a real density change the
+    # pre-fix code could not produce: the natural-origin cohorts carry uncal * f, and f moves over time as
+    # fragmentation evolves, so their density changes -- the pre-fix code never haircut the natural curve at
+    # all, so it omitted that flux entirely. Booking it in the density channel is right.
     #
     # A gdx without p35_carbon_density_secdforest (upstream develop, pre-PR#876 runs) keeps the previous code
     # path unchanged, postsolve share and all.
@@ -966,7 +977,22 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     # therefore routed into regrowth on that path: regrowth is a signed uptake line, the term is the
     # natural-origin cohorts' structural (non-ageing) area flux valued at the density gap, and the reported
     # Regrowth | Secondary Forest line is where the natural-origin composition drift already sits. The
-    # legacy postsolve path keeps the previous routing unchanged.
+    # legacy postsolve path keeps the previous routing unchanged. The placement is a decided one; what the
+    # term contains, measured on the two L4 gate runs, is:
+    #   (i)   -s_t * reduction_t * gap -- the natural-origin slice of this step's secdforest reduction. It is
+    #         a VALUATION correction to the gross harvest and deforestation lines, which value the reduction
+    #         at the calibrated curve while the model removed carbon at the blend.
+    #   (ii)  +aged(s_t-1 * reduction_t-1) * gap -- the same slice reversed one step later, because GAMS's
+    #         protected natural AREA never lost it while its carbon did. That is an area/carbon inconsistency
+    #         on the GAMS side which emisCO2 inherits; it alternates sign and nets out over time:
+    #         edge ON 2070-2100 the pair (i)+(ii) is -3.42 / +2.30 / -7.75 / +4.09 Mt CO2/yr World, with a
+    #         cumulative -0.048 Gt CO2 over 2000-2100. In 2070-2100 (i)+(ii) is the whole term.
+    #   (iii) -aged(s * disturbance_loss) * gap -- the natural-origin part of shifting cultivation,
+    #         0.06 .. 0.75 Mt CO2/yr World over 2030-2050. This is the only content the legacy emisDegrad
+    #         routing ever carried.
+    #   The three do not quite close in 2030-2050: a remainder of up to 0.62 Mt CO2/yr World (2030) comes
+    #   from the natural-origin share of the other-land-to-secdforest recovery inflow, which lands in
+    #   ac35-ac55. Total World is 0.67 .. 0.83 Mt CO2/yr in 2030-2035 and zero before 2030.
     if (!is.null(structObjVeg)) {
         if (is.null(secdforestNatural)) {
             emisDegrad[, , "secdforest.vegc"]   <- emisDegrad[, , "secdforest.vegc"]   + structObjVeg

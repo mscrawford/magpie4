@@ -51,7 +51,12 @@
   stopifnot(sum(isValidate) == 1)
   j   <- which(isValidate)
   cap <- bquote(assign("captured",
-                       list(totalStock = totalStock, totalStockCheck = totalStockCheck, output = output),
+                       list(totalStock = totalStock, totalStockCheck = totalStockCheck, output = output,
+                            secdforestNatural = if (exists("secdforestNatural", inherits = FALSE)) {
+                              secdforestNatural
+                            } else {
+                              NULL
+                            }),
                        envir = .(env)))
   body(fn) <- as.call(c(list(as.name("{")), statements[seq_len(j - 1)], list(cap),
                         statements[j:length(statements)]))
@@ -100,9 +105,10 @@
   out <- withCallingHandlers(instrumented(gdx, level = "cell", sum_cpool = FALSE, sum_land = FALSE),
                              warning = collect)
   res <- list(out = out, warnings = warnEnv$warns,
-              totalStock      = captureEnv$captured$totalStock,
-              totalStockCheck = captureEnv$captured$totalStockCheck,
-              cellOutput      = captureEnv$captured$output)
+              totalStock        = captureEnv$captured$totalStock,
+              totalStockCheck   = captureEnv$captured$totalStockCheck,
+              cellOutput        = captureEnv$captured$output,
+              secdforestNatural = captureEnv$captured$secdforestNatural)
   assign(key, res, envir = .emisCO2Cache)
   res
 }
@@ -177,8 +183,16 @@
   share[, , ] <- 0
   share[defined]  <- (cal - blendVeg)[defined] / gap[defined]
   share[!defined] <- sharePost[!defined]
-  list(share = share, gap = gap, area = area, natPre = share * area, natPost = natPost,
-       sharePost = sharePost, defined = defined, retention = retention, blendVeg = blendVeg, cal = cal)
+  # The audit's form, written out with the divisions: (cal/f - blend/f) / (cal/f - uncal). The package uses
+  # the algebraically identical (cal - blend) / (cal - uncal * f); asserting the two agree pins the package
+  # to the intended formula rather than to whatever this file happens to recompute.
+  shareDivided <- share
+  usable <- defined & (retention > 1e-10)
+  shareDivided[usable] <- ((cal / retention - blendVeg / retention)[usable]) /
+    ((cal / retention - uncal)[usable])
+  list(share = share, shareDivided = shareDivided, usable = usable, gap = gap, area = area,
+       natPre = share * area, natPost = natPost, sharePost = sharePost, defined = defined,
+       retention = retention, blendVeg = blendVeg, cal = cal, uncal = uncal)
 }
 
 
@@ -208,15 +222,36 @@ test_that("edge-OFF: reconstructed secdforest vegc and litc stocks equal ov_carb
 })
 
 
-test_that("the presolve natural-origin share recovered from the blend is a share, and reproduces the level", {
+test_that("the package's own natural-origin share is a share and matches the audit's closed form", {
+  # This block deliberately reads the share the PACKAGE built (secdforestNatural$area / solved area), not one
+  # recomputed here: the level identity area*cal - nat*gap == area*blend holds for ANY gap as long as the
+  # share is defined by that same gap, so a reconstruction in this file would test the test. A mutant that
+  # drops the retention factor f from the gap (leaving the natural curve un-haircut, as the pre-fix code did)
+  # keeps the level exact but produces a share of up to 1.16 and an edge-ON World natural-origin area of
+  # 85.8 Mha in 2100 instead of 91.7; both assertions below kill it.
   for (which in c("ON", "OFF")) {
     gdx <- .skipUnlessGateGdx(which)
+    run <- .runEmisCO2(paste0("fix", which), magpie4::emisCO2, gdx)
+    nat <- run$secdforestNatural
+    expect_false(is.null(nat))
+
+    years <- magclass::getYears(nat$area)
+    area  <- gdx2::readGDX(gdx, "ov35_secdforest", select = list(type = "level"))[, years, ]
+    share <- nat$area
+    share[, , ] <- 0
+    hasArea <- area > 1e-6
+    share[hasArea] <- nat$area[hasArea] / area[hasArea]
+    expect_true(all(share >= -1e-9 & share <= 1 + 1e-9))
+
+    # and it is the audit's formula, not merely some share
     p <- .presolveNatural(gdx)
-    expect_true(all(p$share >= -1e-9 & p$share <= 1 + 1e-9))
-    # the level identity that makes this construction exact: area * cal - natPre * gap == area * blend
-    lvl <- magclass::dimSums(p$area * p$cal, dim = 3) - magclass::dimSums(p$natPre * p$gap, dim = 3)
-    ref <- .refSecdforestStock(gdx, "vegc")[, magclass::getYears(p$area), ]
+    expect_lt(max(abs((share - p$shareDivided)[p$usable & hasArea])), 1e-9)
+
+    # the level identity, from the package's own natural area
+    lvl <- magclass::dimSums(area * p$cal, dim = 3) - magclass::dimSums(nat$area * nat$gapVeg, dim = 3)
+    ref <- .refSecdforestStock(gdx, "vegc")[, years, ]
     expect_lt(max(abs(lvl - ref)), 1e-6)
+
     # where the gap vanishes the share is 0/0 and the postsolve share stands in; those cells are the ac0
     # class only, and its gap is identically zero in every year, so the choice cannot affect any flux term.
     anyUndefined <- apply(as.array(!p$defined), 3, any)
@@ -224,6 +259,11 @@ test_that("the presolve natural-origin share recovered from the blend is a share
     expect_identical(undefinedAc, "ac0")
     expect_equal(max(abs(p$gap[, , undefinedAc])), 0)
   }
+  # World natural-origin area in 2100, Mha: a direct discriminator against the dropped-f mutant (85.8)
+  natON <- .runEmisCO2("fixON", magpie4::emisCO2, .l4GateGdx("ON"))$secdforestNatural
+  # absolute bound on purpose: expect_equal's tolerance is RELATIVE in testthat 3e, and 0.1 relative would
+  # be +-9 Mha, wide enough for the dropped-f mutant's 85.8 to pass
+  expect_lt(abs(sum(natON$area[, "y2100", ]) - 91.7), 0.2)
 })
 
 
@@ -261,6 +301,13 @@ test_that("the composition drift stays in land-use change: Indirect tracks the p
     ccFixed  <- .secdforestChannel(fixed,  "cc")
     ccPrefix <- .secdforestChannel(prefix, "cc")
     expect_lt(max(abs(ccFixed - ccPrefix), na.rm = TRUE), 5)
+    # Pin the residue rather than bound it. It is the change in the cc + interaction correction and is
+    # explained in R/emisCO2.R: edge ON 2100 = +4.434 from the haircut f in the gap and -0.013 from the
+    # natural area; edge OFF 2100 = +0.433 from the area alone (f == 1 there, so the gap part is nil). A
+    # mutant that drops f from the gap collapses the edge-ON value to ~0, so a mere bound would let it live.
+    # absolute bounds (expect_equal's tolerance is relative): the dropped-f mutant gives 2.2 on edge ON
+    expect_lt(abs(unname((ccFixed - ccPrefix)[["y2100"]]) - if (which == "ON") 4.42 else 0.433),
+              if (which == "ON") 0.1 else 0.05)
 
     # the level correction lands in lu, and cc + lu still reproduces the net change
     luFixed    <- .secdforestChannel(fixed,  "lu")
@@ -318,6 +365,24 @@ test_that("the stock-consistency check now catches an above-ground mismatch unde
                         magclass::dimSums(run$totalStockCheck[, , "soilc"], dim = 3)), na.rm = TRUE)
   expect_lt(soilcOld, 1e-3)  # the pre-fix condition: satisfied, hence silent
   expect_gt(max(abs(.recSecdforestStock(run, "vegc") - .refSecdforestStock(gdx, "vegc")), na.rm = TRUE), 1)
+
+  # The share is deliberately NOT clamped to [0, 1]: s * gap == cal - blend must hold identically, which is
+  # what keeps the reconstructed level exact. The perturbed blend pushes the share outside [0, 1], so the
+  # reconstruction must still equal area x the PERTURBED blend -- a mutant that clamps the share fails here
+  # on the identity rather than only on the warning above.
+  blendPerturbed <- perturb(gdx2::readGDX(gdx, "p35_carbon_density_secdforest"))
+  years <- magclass::getYears(blendPerturbed)
+  area  <- gdx2::readGDX(gdx, "ov35_secdforest", select = list(type = "level"))[, years, ]
+  target <- magclass::dimSums(area * magclass::collapseNames(blendPerturbed[, , "vegc"]), dim = 3)
+  expect_lt(max(abs(.recSecdforestStock(run, "vegc") - target)), 1e-6)
+  natArea <- run$secdforestNatural$area
+  share <- natArea
+  share[, , ] <- 0
+  hasArea <- area > 1e-6
+  share[hasArea] <- natArea[hasArea] / area[hasArea]
+  # the perturbation drives the share NEGATIVE (scaling the blend up shrinks cal - blend): measured range
+  # [-5.27, 1.00] with 572 cells below zero, so a clamp to [0, 1] would bite and break the identity above
+  expect_lt(min(share), -1)
 })
 
 

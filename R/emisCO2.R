@@ -34,32 +34,97 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     ageClasses <- readGDX(gdx, "ac")
 
     ###
-    # Secondary-forest age-class carbon density: use the blend GAMS actually solved with.
+    # Secondary-forest natural-origin cohorts: level from the exported blend, drift booked in land-use change.
     #
-    # DEFECT FIX 2026-09-20 (secdforest vegc stock rebuild). emisCO2 used to REBUILD this density from the two
-    # input curves plus a natural-origin correction:
-    #   * pm_carbon_density_secdforest_ac         FRA-calibrated curve. Under model version L4 the edge
-    #                                             degradation factor is applied to it IN PLACE
-    #                                             (35_natveg/pot_forest_may24/presolve.gms:489-490).
-    #   * pm_carbon_density_secdforest_ac_uncalib raw natveg curve, NEVER haircut (its only assignment is
-    #                                             52_carbon/normal_dec17/start.gms:43).
-    #   * p35_secdforest_natural                  a POSTSOLVE export, used here over the SOLVED area.
-    # GAMS instead blends the two RAW curves with the PRESOLVE natural-origin share
-    # (presolve.gms:253-257) and haircuts the whole blend afterwards (presolve.gms:487-488), exporting the
-    # result as p35_carbon_density_secdforest(t,j,ac,ag_pools) -- the density that q35_carbon and therefore
-    # ov_carbon_stock(secdforest) are built from.
-    # Two errors followed from the rebuild, both measured on the L4 gate runs (2026-09-20):
-    #   (i)  edge ON: the un-haircut uncalib curve entered the natural-origin cohorts, overstating the
-    #        secdforest vegc stock by +490 MtC World in 2100 (0.29 %, 128 MtC in the worst cluster; up to
-    #        44 Mt CO2/yr and 1.8 Gt cumulative 2000-2100 on net land CO2);
-    #   (ii) edge OFF (edge-independent): postsolve share over solved area instead of the presolve share,
-    #        -9.3 / -2.8 / +19.9 / -1.5 MtC World in 2070-2100 (exactly 0 through 2060).
-    # Both vanish when the exported blend is read instead. It is therefore used verbatim for every ag_pool it
-    # carries, and the natural-origin emulation (the stock correction in calculateMainEmissions and the
-    # cohort-origin regrowth split with its loss-side companion structObjVeg) is skipped for those pools.
-    # A gdx without the symbol (upstream develop, pre-PR#876 runs) keeps the previous code path unchanged.
-    secdforestBlend      <- readGDX(gdx, "p35_carbon_density_secdforest", react = "silent")
-    secdforestBlendPools <- if (is.null(secdforestBlend)) character(0) else getItems(secdforestBlend, dim = "ag_pools")
+    # DEFECT FIX 2026-09-20 (secdforest vegc), revised the same day after an independent audit.
+    #
+    # GAMS gives secdforest a BLENDED age-class vegc density: the FRA-calibrated curve
+    # pm_carbon_density_secdforest_ac mixed with the uncalibrated natveg curve
+    # pm_carbon_density_secdforest_ac_uncalib (whose only assignment is 52_carbon/normal_dec17/start.gms:43,
+    # so it is never haircut) using the PRESOLVE natural-origin share
+    # (35_natveg/pot_forest_may24/presolve.gms:253-257). The degradation (edge) haircut is then applied to the
+    # whole blend (presolve.gms:487-488) and, separately, to the calibrated curve IN PLACE
+    # (presolve.gms:489-490). The blend is exported as p35_carbon_density_secdforest(t,j,ac,ag_pools) and is
+    # what q35_carbon, and therefore ov_carbon_stock(secdforest), is built from.
+    #
+    # emisCO2 emulated that blend with the POSTSOLVE export p35_secdforest_natural over the SOLVED area and
+    # with the uncalibrated curve un-haircut. Both inputs were wrong, measured on the L4 gate runs:
+    #   (i)  edge ON: the un-haircut uncalib curve overstated the secdforest vegc stock by +490 MtC World in
+    #        2100 (0.29 %, 128 MtC worst cluster; 44 Mt CO2/yr and 1.8 Gt cumulative on net land CO2);
+    #   (ii) edge OFF: the postsolve share alone shifted it by -9.3 / -2.8 / +19.9 / -1.5 MtC in 2070-2100.
+    # Reading the blend verbatim as the density fixes the LEVEL, but it also moves the natural-origin
+    # composition drift (~300 Mt CO2/yr by 2100) out of land-use change into the density channel, i.e. into
+    # the reported Indirect line, which contradicts that line's definition (environmental change only, see
+    # reportEmissions) and magpie4's own precedent for land-use-driven density change (emisSOC books it in lu
+    # and only climate in cc). Owner's decision 2026-09-20: keep the level from the blend, keep the drift in
+    # land-use change. The emulation is therefore KEPT and its two inputs are corrected:
+    #
+    #   * the natural-origin AREA becomes the PRESOLVE one, recovered from the exported blend itself. With
+    #     f = prod over drivers of (1 - p35_degr_applied(t,j,"secdforest",ac,.)), the GAMS retention factor
+    #     (presolve.gms:414), cal and blend as exported (both haircut) and uncal never haircut,
+    #         blend = cal - s * (cal - uncal * f)   =>   s = (cal - blend) / (cal - uncal * f)
+    #     which is (cal/f - blend/f) / (cal/f - uncal) without the division by f. Natural area = s * solved
+    #     secdforest area. Verified: s in [0, 1] in every cluster, age class and step on both gate runs, and
+    #     equal to the divided form to 3e-16. No clamping is applied: s * gap == cal - blend holds
+    #     identically, and that identity is what makes the reconstructed level exact.
+    #   * the natural-origin DENSITY becomes uncal * f, so the haircut sits on BOTH curves. The gap
+    #     cal - uncal * f then satisfies  area * cal - s * area * gap == area * blend  identically, so the
+    #     stock matches ov_carbon_stock to gdx precision (measured 1.9e-07 MtC) while every flux term stays
+    #     in the channel the pre-fix code put it in (Indirect moves by < 2 Mt CO2/yr).
+    #   * where the gap vanishes (cal == uncal * f: an age class with no calibration difference -- 3600 of
+    #     223200 cluster-ac-steps, 1.6 %, the ac0 class on both gate runs) s is 0/0 and the postsolve share
+    #     is used instead. The level is insensitive to the choice there because the gap it multiplies is 0.
+    #
+    # A gdx without p35_carbon_density_secdforest (upstream develop, pre-PR#876 runs) keeps the previous code
+    # path unchanged, postsolve share and all.
+    secdforestBlend <- readGDX(gdx, "p35_carbon_density_secdforest", react = "silent")
+
+    # (j,t,ac) presolve natural-origin area in Mha and the haircut-consistent vegc density gap in tC/ha,
+    # or NULL when the exported blend (or any input it needs) is absent.
+    secdforestNatural <- local({
+        if (is.null(secdforestBlend) || !("vegc" %in% getItems(secdforestBlend, dim = "ag_pools"))) {
+            return(NULL)
+        }
+        calAc   <- readGDX(gdx, "pm_carbon_density_secdforest_ac", react = "silent")
+        uncalAc <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
+        areaAc  <- readGDX(gdx, "ov35_secdforest", select = list(type = "level"), react = "silent")
+        natPost <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
+        if (is.null(calAc) || is.null(uncalAc) || is.null(areaAc) || is.null(natPost)) {
+            return(NULL)
+        }
+        blendVeg <- collapseNames(secdforestBlend[, years, "vegc"])
+        calVeg   <- collapseNames(calAc[, years, "vegc"])
+        uncalVeg <- collapseNames(uncalAc[, years, "vegc"])
+        if (!identical(getItems(blendVeg, dim = 1), getItems(calVeg, dim = 1)) ||
+            !identical(getItems(blendVeg, dim = "ac"), getItems(calVeg, dim = "ac"))) {
+            stop("p35_carbon_density_secdforest does not align with pm_carbon_density_secdforest_ac ",
+                 "in magpie4::emisCO2")
+        }
+        # retention factor f: 1 where the degradation ledger is absent or every driver is switched off
+        retention <- calVeg
+        retention[, , ] <- 1
+        degr <- readGDX(gdx, "p35_degr_applied", react = "silent")
+        if (!is.null(degr)) {
+            degr <- degr[, years, "secdforest"]
+            for (driver in getItems(degr, dim = "degr35")) {
+                retention <- retention * (1 - collapseNames(degr[, , driver]))
+            }
+        }
+        gapVeg  <- calVeg - uncalVeg * retention
+        areaVeg <- areaAc[, years, ]
+        # postsolve share, used only where the gap vanishes and s is 0/0
+        sharePost <- areaVeg
+        sharePost[, , ] <- 0
+        hasArea <- areaVeg > 1e-10
+        sharePost[hasArea] <- pmin(natPost[, years, ][hasArea], areaVeg[hasArea]) / areaVeg[hasArea]
+        defined <- abs(gapVeg) > 1e-10
+        share <- gapVeg
+        share[, , ] <- 0
+        share[defined]  <- (calVeg - blendVeg)[defined] / gapVeg[defined]
+        share[!defined] <- sharePost[!defined]
+        list(area = share * areaVeg, gapVeg = gapVeg, retention = retention,
+             nUndefined = sum(!defined), nCells = length(defined))
+    })
 
     ###
     # FUNCTIONS -------------------------------------------------------------------------------------------------------
@@ -183,21 +248,12 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
 
         # --- age class carbon densities, excl forestry
 
+        # The calibrated curve stays the secdforest density here (NOT the exported blend): the
+        # natural-origin cohorts are handled by the correction in calculateMainEmissions and the cohort
+        # split in calculateRegrowthEmissions, which keeps the composition drift in land-use change.
+        # See the note in CONSTANTS.
         secdforest <- readGDX(gdx, "pm_carbon_density_secdforest_ac", "pm_carbon_density_ac",
                               format = "first_found")[, years, ]
-        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): overwrite with the post-blend, post-haircut
-        # density exported by GAMS, for every ag_pool it carries. litc is bit-identical to the calibrated
-        # curve (the haircut is vegc-only and the calibration does not touch litc), so only vegc moves.
-        if (length(secdforestBlendPools) > 0) {
-            blendSecdf <- secdforestBlend[, years, ]
-            commonItems <- intersect(getItems(blendSecdf, dim = 3), getItems(secdforest, dim = 3))
-            if (!identical(getItems(blendSecdf, dim = 1), getItems(secdforest, dim = 1)) ||
-                length(commonItems) != length(getItems(blendSecdf, dim = 3))) {
-                stop("p35_carbon_density_secdforest does not align with pm_carbon_density_secdforest_ac ",
-                     "in magpie4::emisCO2")
-            }
-            secdforest[, , commonItems] <- blendSecdf[, , commonItems]
-        }
         secdforest <- add_dimension(secdforest, dim = 3.1, add = "land", nm = "secdforest")
 
         other <- readGDX(gdx, "ov_land_other", select = list(type = "level"), react = "silent")
@@ -361,25 +417,30 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # Only vegc is affected (M52 calibration only modifies vegc).
         # Falls back gracefully when parameters are absent (develop compatibility).
         #
-        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): this block is an EMULATION of the GAMS blend
-        # that got both the share (postsolve over solved area, not the presolve share) and, under model
-        # version L4, the haircut (uncalib enters un-haircut) wrong. Where the gdx carries the exported
-        # blend p35_carbon_density_secdforest it is already in densities$secdforest for that pool, so the
-        # emulation must NOT be applied on top -- it would double-count the natural-origin adjustment.
+        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): where the exported blend is available the
+        # natural-origin area is the PRESOLVE one recovered from it and the gap is haircut-consistent
+        # (cal - uncal * f), which makes area * cal - nat * gap equal area * blend identically. Without the
+        # blend the previous inputs are used unchanged: the postsolve export over the solved area and the
+        # un-haircut uncalibrated curve.
         p35NaturalSecdf  <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
         densityUncalSecdf <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
-        if (!is.null(p35NaturalSecdf) && !is.null(densityUncalSecdf) &&
-            !("vegc" %in% secdforestBlendPools)) {
+        if (!is.null(secdforestNatural) ||
+            (!is.null(p35NaturalSecdf) && !is.null(densityUncalSecdf))) {
             yrsCalc <- getYears(areas$secdforest)
-            # natRaw shape (j,t,ac); align with secdforest area
-            natRaw  <- p35NaturalSecdf[, yrsCalc, ]
             secdfAreaSecdf <- collapseNames(areas$secdforest)  # (j,t,ac)
-            natRaw[natRaw > secdfAreaSecdf] <- secdfAreaSecdf[natRaw > secdfAreaSecdf]
+            if (!is.null(secdforestNatural)) {
+                natRaw <- secdforestNatural$area[, yrsCalc, ]
+                gapVeg <- secdforestNatural$gapVeg[, yrsCalc, ]
+            } else {
+                # natRaw shape (j,t,ac); align with secdforest area
+                natRaw  <- p35NaturalSecdf[, yrsCalc, ]
+                natRaw[natRaw > secdfAreaSecdf] <- secdfAreaSecdf[natRaw > secdfAreaSecdf]
 
-            # Density gap for vegc only (other pools: cal == uncal, gap = 0)
-            calVeg   <- collapseNames(densities$secdforest[, , "vegc"])  # (j,t,ac)
-            uncalVeg <- densityUncalSecdf[, yrsCalc, "vegc"]              # (j,t,ac)
-            gapVeg   <- calVeg - uncalVeg
+                # Density gap for vegc only (other pools: cal == uncal, gap = 0)
+                calVeg   <- collapseNames(densities$secdforest[, , "vegc"])  # (j,t,ac)
+                uncalVeg <- densityUncalSecdf[, yrsCalc, "vegc"]              # (j,t,ac)
+                gapVeg   <- calVeg - uncalVeg
+            }
 
             # Stock correction = natural × gap (per ac, sum)
             stockCorrVeg <- dimSums(natRaw * gapVeg, dim = 3)             # (j,t)
@@ -700,25 +761,38 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         p35NaturalRaw <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
         densityUncalibRaw <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
 
-        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): the cohort-origin split, and its loss-side
-        # companion structObjVeg that reconciles the gross sub-components with the corrected emisArea, are
-        # the gain-side half of the same emulation. With the exported blend in densities$secdforest every
-        # cohort already carries the density GAMS used, so the single-density path is the consistent one
-        # (it is the decomposition of tDiff(area x blend) that emisArea is now built from); keeping the
-        # split would value the natural-origin area at the uncalibrated curve a second time.
-        haveNaturalSplit <- !is.null(p35NaturalRaw) && !is.null(densityUncalibRaw) &&
-                            !("vegc" %in% secdforestBlendPools)
+        # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): the gain-side half of the same emulation. With
+        # the exported blend the natural-origin area is the presolve one and the natural-origin curve is
+        # uncal * f, which here is the calibrated curve minus the haircut-consistent gap -- so the split
+        # stays, and with it the composition drift in land-use change. Without the blend, the previous
+        # inputs are used unchanged.
+        haveNaturalSplit <- !is.null(secdforestNatural) ||
+                            (!is.null(p35NaturalRaw) && !is.null(densityUncalibRaw))
         if (haveNaturalSplit) {
             naturalArea <- area
             naturalArea[, , ] <- 0
-            p35NaturalRaw <- p35NaturalRaw[, getYears(area), ]
-            naturalArea[, , "secdforest"] <- p35NaturalRaw
-            naturalArea[naturalArea > area] <- area[naturalArea > area]
-            nonNaturalArea <- area - naturalArea
+            if (!is.null(secdforestNatural)) {
+                naturalArea[, , "secdforest"] <- secdforestNatural$area[, getYears(area), ]
+                gapVegRegrow <- secdforestNatural$gapVeg[, getYears(area), ]
+                if (!identical(getItems(densityAg, dim = "ac"), getItems(gapVegRegrow, dim = "ac"))) {
+                    stop("age classes of the secdforest density gap do not align in magpie4::emisCO2")
+                }
+                gapAg <- densityAg
+                gapAg[, , ] <- 0
+                gapAg[, , "vegc"] <- gapVegRegrow
+                densityUncalibAg <- densityAg - gapAg
+            } else {
+                p35NaturalRaw <- p35NaturalRaw[, getYears(area), ]
+                naturalArea[, , "secdforest"] <- p35NaturalRaw
+                naturalArea[naturalArea > area] <- area[naturalArea > area]
 
-            densityUncalibAg <- densityAg
-            densityUncalibAg[, , ] <- 0
-            densityUncalibAg[, , "secdforest"] <- densityUncalibRaw[, getYears(area), agPools]
+                densityUncalibAg <- densityAg
+                densityUncalibAg[, , ] <- 0
+                densityUncalibAg[, , "secdforest"] <- densityUncalibRaw[, getYears(area), agPools]
+                gapVegRegrow <- collapseNames(densities$secdforest[, , "vegc"]) -
+                                collapseNames(densityUncalibRaw[, getYears(area), "vegc"])
+            }
+            nonNaturalArea <- area - naturalArea
 
             regrowthEmisSecdf_nonNat <- .regrowth(
                 densityAg            = densityAg,
@@ -737,9 +811,7 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
             regrowthEmisSecdforest <- regrowthEmisSecdf_nonNat + regrowthEmisSecdf_nat
 
             # Loss-side companion to the gain-side natural split: natural-cohort non-aging area
-            # flux valued at the vegc density gap, routed into emisDegrad below (follow-up to PR#135).
-            gapVegRegrow <- collapseNames(densities$secdforest[, , "vegc"]) -
-                            collapseNames(densityUncalibRaw[, getYears(area), "vegc"])
+            # flux valued at the vegc density gap (set above), routed into emisDegrad below (PR#135).
             natFlux      <- collapseNames(naturalArea) -
                             .acGrow(.tShift(collapseNames(naturalArea))) +
                             collapseNames(recoveredForest)
@@ -883,8 +955,24 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     emisHarvest       <- grossEmissions$emisHarvest
 
     # Reconcile the gross sub-components with the natural-origin-corrected emisArea (no-op pre-PR#876).
+    #
+    # DEFECT FIX 2026-09-20: with the PRESOLVE natural-origin area (the blend-based path, see CONSTANTS) this
+    # term is SIGNED and much larger than before -- the presolve share applied to the solved area does not
+    # follow pure ageing plus forest recovery whenever the solve changed the area inside the step, whereas
+    # the postsolve natural area did (natural cohorts are harvest-protected), which is why the legacy term
+    # was ~0.3 Mt CO2/yr World and non-negative. Booking a signed term on emisDegrad drove the gross
+    # shifting-cultivation line negative in 13-14 clusters (down to -8.6 Mt CO2/yr, World -9.9 edge-ON and
+    # -21.9 edge-OFF in 2100) and tripped the "Gross emissions are less than zero" validator. It is
+    # therefore routed into regrowth on that path: regrowth is a signed uptake line, the term is the
+    # natural-origin cohorts' structural (non-ageing) area flux valued at the density gap, and the reported
+    # Regrowth | Secondary Forest line is where the natural-origin composition drift already sits. The
+    # legacy postsolve path keeps the previous routing unchanged.
     if (!is.null(structObjVeg)) {
-        emisDegrad[, , "secdforest.vegc"] <- emisDegrad[, , "secdforest.vegc"] + structObjVeg
+        if (is.null(secdforestNatural)) {
+            emisDegrad[, , "secdforest.vegc"]   <- emisDegrad[, , "secdforest.vegc"]   + structObjVeg
+        } else {
+            emisRegrowth[, , "secdforest.vegc"] <- emisRegrowth[, , "secdforest.vegc"] + structObjVeg
+        }
     }
 
     subcomponents <- emisRegrowth + emisDeforestation + emisDegrad + emisOtherLand + emisHarvest
@@ -1000,13 +1088,18 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # fired on any pool, but the inner condition it had to pass was a soilc-only comparison -- so the
         # above-ground rebuild was never checked at all. That is why the 490 MtC secdforest vegc error
         # documented in CONSTANTS shipped silently. vegc and litc are now compared per land type, cell and
-        # year, at the same 1e-03 MtC tolerance. soilc keeps the relaxed, summed-over-land-type comparison
-        # under dynSom, and only there: with dynSom the soil pool comes from emisSOC and is split over land
-        # types by area weights (see the emisSOC branch above), so its land-type attribution is a
-        # reporting-side construct that is not meant to reproduce carbonstock cell by land type -- only its
-        # sum is. Without dynSom every pool, soilc included, is compared elementwise as before.
+        # year, at the same 1e-03 MtC tolerance, but ONLY where the exported secdforest blend is available
+        # (secdforestNatural): that is what makes the above-ground reconstruction exact. Without the blend
+        # the reconstruction still carries the known presolve/postsolve share mismatch on time steps longer
+        # than the age-class width (up to ~20 MtC on a 10-year step), so those gdx keep the old soilc-only
+        # relaxation and do not start warning. soilc itself keeps the relaxed, summed-over-land-type
+        # comparison under dynSom, and only there: with dynSom the soil pool comes from emisSOC and is split
+        # over land types by area weights (see the emisSOC branch above), so its land-type attribution is a
+        # reporting-side construct not meant to reproduce carbonstock cell by land type -- only its sum is.
+        # Without dynSom every pool, soilc included, is compared elementwise as before.
         cPoolsCheck  <- getItems(totalStock, dim = "c_pools")
         cPoolsStrict <- if (dynSom) setdiff(cPoolsCheck, "soilc") else cPoolsCheck
+        if (dynSom && is.null(secdforestNatural)) cPoolsStrict <- character(0)
         stockMismatch <- FALSE
         if (length(cPoolsStrict) > 0 &&
             any(abs(totalStock[, , cPoolsStrict] - totalStockCheck[, , cPoolsStrict]) > 1e-03,

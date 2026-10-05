@@ -123,6 +123,17 @@
 #'         own deficit. The harvest is SUBTRACTED because \code{ov35_secdforest_reduction} bounds
 #'         \code{ov35_hvarea_secdforest} from above (q35_hvarea_secdforest is =l=; verified on the gate run, min
 #'         red - hv = -7.6e-14), so counting both would double-count the leaving side.
+#'   \item A HARVESTABLE FORESTRY POOL that takes the degradation factor (\code{other_planted}, since the develop
+#'         merge of 2026-10) is clear-cut and replanted to ITSELF, but not always in full: in
+#'         32_forestry/dynamic_may24/equations.gms every per-class reduction of such a pool IS harvest
+#'         (q32_hvarea_forestry, =e=), the replanted area is \code{v32_land_replant} = harvested area x min(1,
+#'         future / current demand) (q32_land_replant), it re-enters over ac_est in equal parts (q32_forestry_est),
+#'         and the rest of the harvested area leaves the pool (q32_land_reduction_forestry). The model fixes a
+#'         replanted AREA per cluster, not which harvested classes it came from, so the harvested carbon is split
+#'         by the replanted share s = replant / harvested area, the same for every class: T''_harvest =
+#'         g_t (rhoEst_t replant_t - s_t hvC0_t) is the reset (area-neutral for the pool) and T''_conv =
+#'         -g_t (1 - s_t) hvC0_t the harvested area that is not replanted. With s = 1 this is the secondary-forest
+#'         case. See \code{.edgeReplantedHarvest}.
 #'   \item T''_other = T'' - T''_harvest - T''_conv: establishment from other sources (primforest harvest
 #'         reclassified, restoration), youngsecdf maturation, conversions IN, and the disturbance redistribution -
 #'         the latter because \code{red} is measured against the post-disturbance presolve state while Atilde is
@@ -181,7 +192,9 @@
 #'   (\code{q35_other_regeneration}) and harvested primforest is reclassified as secondary forest
 #'   (\code{q35_secdforest_regeneration}), so in both cases nothing comes back
 #' @param redC0 unreduced carbon on the FULL per-class area reduction, sum_ac rho_ac,t red_ac,t (same shape;
-#'   Mio tC). The harvest is subtracted inside this function, not by the caller
+#'   Mio tC). The harvest is subtracted inside this function, not by the caller. For a partly replanted forestry pool
+#'   \code{hvC0} is the REPLANTED share of the harvested carbon and \code{redC0} all of it
+#'   (\code{.edgeReplantedHarvest})
 #' @return list of magpie objects S, E, F, G, H, Hharvest, T (pool level) and Epc, Fpc, Gpc, Tpc, TpcHarv,
 #'   TpcConv, TpcOther (per cohort), all Mio tC per step (flows are per step, not per year)
 #' @author Michael Crawford
@@ -399,4 +412,41 @@
   out <- magclass::dimSums(rhoAc, dim = 3)
   out[, , ] <- res
   out
+}
+
+#' @title edgeReplantedHarvest
+#' @description The three harvest inputs of \code{.edgeCommittedStockTerms} for a forestry pool that is clear-cut
+#'   and replanted to itself, possibly in part (32_forestry \code{harvest32}; used for \code{other_planted}).
+#'   What the model does, 32_forestry/dynamic_may24: the age classes are shifted by k_t and the establishment
+#'   classes emptied in presolve; \code{v32_land_reduction(j,type32,ac_sub)} = presolve area - solved area
+#'   (equations.gms, q32_land_reduction) and for a harvestable pool it EQUALS \code{v32_hvarea_forestry}
+#'   (q32_hvarea_forestry, =e=), so nothing leaves a class except by harvest; \code{v32_land_replant(j,harvest32)}
+#'   = sum_ac hv_ac x min(1, future / current demand) (q32_land_replant) comes back, spread equally over ac_est
+#'   with all other establishment (q32_forestry_est); the remainder of the harvested area leaves the pool
+#'   (q32_land_reduction_forestry subtracts the replant from the reduction). The gdx carries the harvested area
+#'   per class and the replanted area per cluster, NOT which classes the replanted hectares were cut from, so the
+#'   harvested carbon is attributed to "reset" and "leaving" by the replanted share of the harvested AREA, equal
+#'   for all classes. That split is a convention of the two informational sub-lines; their sum, T'' and both
+#'   identities do not depend on it. Internal.
+#' @param hvAc harvested area per cluster, step and age class (magpie, cells x years x ac; Mha): the pool's slice
+#'   of \code{ov32_hvarea_forestry}
+#' @param rhoAc unreduced vegc density of the pool per cluster, step and age class (same shape; tC/ha)
+#' @param replant replanted area per cluster and step (magpie, cells x years x 1; Mha): the pool's slice of
+#'   \code{ov32_land_replant}
+#' @param shift cohort shift per step from .edgeAcShift (NA first)
+#' @return list of magpie objects (cells x years x 1; Mio tC): \code{hvC0} the replanted share of the harvested
+#'   unreduced carbon, \code{hvBack} the unreduced carbon the replanted area re-enters with (establishment-class
+#'   mean density x replanted area), \code{redC0} all of the harvested unreduced carbon (= the pool's whole
+#'   per-class reduction)
+#' @author Michael Crawford
+#' @keywords internal
+#' @noRd
+.edgeReplantedHarvest <- function(hvAc, rhoAc, replant, shift) {
+  replant <- magclass::dimSums(replant, dim = 3)
+  hvRho <- .edgeHarvestC0(hvAc, rhoAc)
+  share <- replant / magclass::dimSums(hvAc, dim = 3)
+  share[!is.finite(share)] <- 0                          # nothing harvested: nothing to split
+  list(hvC0 = share * hvRho,
+       hvBack = .edgeEstRho(rhoAc, shift) * replant,
+       redC0 = hvRho)
 }

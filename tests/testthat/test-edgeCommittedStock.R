@@ -469,3 +469,93 @@ test_that("a supplied applied fraction that disagrees with D / C0 is refused", {
                                                                                     magpie4:::.edgeAcShift(years)),
                                                   g = ok, poolName = "testpool"))
 })
+
+# ---------------------------------------------------------------------------------------------------------------
+# A harvestable forestry pool that is replanted to itself (32_forestry harvest32; other_planted takes the
+# degradation factor since the develop merge of 2026-10). The model replants v32_land_replant = harvested area x
+# min(1, future / current demand) into the establishment classes and lets the rest of the harvested area leave the
+# pool; every per-class reduction of such a pool is harvest. .edgeReplantedHarvest builds the three harvest inputs
+# from the two exports (ov32_hvarea_forestry per class, ov32_land_replant per cluster).
+
+.replantTerms <- function(s, years, hvMat, replantVec) {
+  shift <- magpie4:::.edgeAcShift(years)
+  replant <- new.magpie(magclass::getItems(s$A, dim = 1), years, NULL, fill = 0)
+  replant[, , ] <- replantVec
+  h <- magpie4:::.edgeReplantedHarvest(.acMat(s, years, hvMat), s$rhoAc, replant, shift)
+  tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0,
+                                           C0adv = magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, shift),
+                                           g = s$g, poolName = "forestry_other_planted",
+                                           hvC0 = h$hvC0, hvBack = h$hvBack, redC0 = h$redC0)
+  list(tm = tm, h = h)
+}
+
+.expectReplantIdentities <- function(tm, s, i = 2) {
+  expect_equal(as.vector(tm$Fpc + tm$Gpc)[i], as.vector(tm$Epc)[i], tolerance = 1e-10)
+  expect_equal(as.vector(tm$Epc + tm$Tpc)[i], as.vector(s$D)[i] - as.vector(s$D)[i - 1], tolerance = 1e-10)
+  expect_equal(as.vector(tm$TpcHarv + tm$TpcConv + tm$TpcOther)[i], as.vector(tm$Tpc)[i], tolerance = 1e-10)
+  expect_equal(as.vector(tm$F + tm$G + tm$H)[i], as.vector(tm$E)[i], tolerance = 1e-10)
+}
+
+test_that("a partly replanted forestry pool: identities hold and the replanted share splits reset from leaving", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "acx")
+  # 10 Mha age into acx; 4 Mha are clear-cut there, 3 Mha replanted into ac0, 1 Mha leaves the pool
+  s <- .acSynth(years, acs, rbind(c(0, 2, 8), c(3, 0, 6)), rbind(c(0, 20, 100), c(0, 22, 110)), c(0.20, 0.25))
+  r <- .replantTerms(s, years, hvMat = rbind(c(0, 0, 0), c(0, 0, 4)), replantVec = c(0, 3))
+  tm <- r$tm
+  .expectReplantIdentities(tm, s)
+  # the helper: 3 of 4 harvested Mha come back, so 3/4 of the harvested carbon (110 x 4) is the reset
+  expect_equal(as.vector(r$h$redC0)[2], 110 * 4, tolerance = 1e-12)             # 440
+  expect_equal(as.vector(r$h$hvC0)[2], 0.75 * 110 * 4, tolerance = 1e-12)       # 330
+  expect_equal(as.vector(r$h$hvBack)[2], 0, tolerance = 1e-12)                  # ac0 carries no carbon
+  # per cohort: all 10 Mha aged to acx. E'' = g_t C0adv - D_t-1 = 0.25 * 1100 - 0.2 * 840
+  expect_equal(as.vector(tm$Epc)[2], 0.25 * 1100 - 0.2 * 840, tolerance = 1e-10)     # 107
+  expect_equal(as.vector(tm$Fpc)[2], 0.05 * 1100, tolerance = 1e-10)                 # 55
+  expect_equal(as.vector(tm$Gpc)[2], 0.2 * (1100 - 840), tolerance = 1e-10)          # 52
+  # T'' = the 4 harvested Mha leaving acx at its current deficit; the replanted 3 Mha arrive with none
+  expect_equal(as.vector(tm$Tpc)[2], -0.25 * 110 * 4, tolerance = 1e-10)             # -110
+  expect_equal(as.vector(tm$TpcHarv)[2], -0.25 * 0.75 * 110 * 4, tolerance = 1e-10)  # -82.5, the reset
+  expect_equal(as.vector(tm$TpcConv)[2], -0.25 * 0.25 * 110 * 4, tolerance = 1e-10)  # -27.5, cut and not replanted
+  expect_equal(as.vector(tm$TpcOther)[2], 0, tolerance = 1e-10)
+  # the pool-level harvest-reset continuity term uses the same reset carbon
+  expect_equal(as.vector(tm$Hharvest)[2], -0.2 * 0.75 * 110 * 4, tolerance = 1e-10)  # -66
+})
+
+test_that("a fully replanted forestry pool on a 10-year step re-enters over ac0 and ac5", {
+  years <- c("y2060", "y2070")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  # two classes per step: ac10 <- ac0 (1 Mha), acx <- ac5 + ac10 + acx (9 Mha); 5 Mha cut in acx, 4 replanted
+  # (2 into ac0, 2 into ac5), 1 leaves
+  s <- .acSynth(years, acs, rbind(c(1, 1, 2, 6), c(2, 2, 1, 4)), rbind(c(0, 5, 10, 50), c(0, 6, 12, 60)),
+                c(0.1, 0.1))
+  r <- .replantTerms(s, years, hvMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 5)), replantVec = c(0, 4))
+  tm <- r$tm
+  .expectReplantIdentities(tm, s)
+  expect_equal(as.vector(r$h$hvBack)[2], 3 * 4, tolerance = 1e-12)                 # mean(0, 6) tC/ha x 4 Mha
+  expect_equal(as.vector(tm$Tpc)[2], 0.1 * (6 * 2 - 60 * 5), tolerance = 1e-10)    # -28.8, class by class
+  expect_equal(as.vector(tm$TpcHarv)[2], 0.1 * (12 - 0.8 * 300), tolerance = 1e-10)   # -22.8
+  expect_equal(as.vector(tm$TpcConv)[2], -0.1 * 0.2 * 300, tolerance = 1e-10)         # -6
+  expect_equal(as.vector(tm$TpcOther)[2], 0, tolerance = 1e-10)
+  # with everything replanted the split reduces to the secondary-forest case: no conversion sub-line
+  full <- .replantTerms(s, years, hvMat = rbind(c(0, 0, 0, 0), c(0, 0, 0, 5)), replantVec = c(0, 5))
+  expect_equal(as.vector(full$h$hvC0)[2], as.vector(full$h$redC0)[2], tolerance = 1e-12)
+  expect_equal(as.vector(full$tm$TpcConv)[2], 0, tolerance = 1e-12)
+})
+
+test_that("a forestry pool with no harvest in a step, or with no deficit at all, gives zeros and no NaN", {
+  years <- c("y2000", "y2005")
+  acs   <- c("ac0", "ac5", "acx")
+  s <- .acSynth(years, acs, rbind(c(0, 2, 8), c(0, 0, 10)), rbind(c(0, 20, 100), c(0, 22, 110)), c(0.2, 0.2))
+  r <- .replantTerms(s, years, hvMat = rbind(c(0, 0, 0), c(0, 0, 0)), replantVec = c(0, 0))
+  .expectReplantIdentities(r$tm, s)
+  expect_equal(as.vector(r$h$hvC0)[2], 0, tolerance = 1e-12)          # 0 / 0 replanted share resolved to 0
+  for (k in c("TpcHarv", "TpcConv", "TpcOther", "Hharvest")) expect_equal(as.vector(r$tm[[k]])[2], 0, tolerance = 1e-10)
+  # haircut off (s32_edge_haircut = 0): the export carries D = 0 and the report passes no applied fraction
+  z <- .acSynth(years, acs, rbind(c(0, 2, 8), c(3, 0, 6)), rbind(c(0, 20, 100), c(0, 22, 110)), c(0, 0))
+  rz <- .replantTerms(z, years, hvMat = rbind(c(0, 0, 0), c(0, 0, 4)), replantVec = c(0, 3))
+  for (k in c("S", "Epc", "Fpc", "Gpc", "Tpc", "TpcHarv", "TpcConv", "TpcOther", "E", "H", "Hharvest")) {
+    v <- as.vector(rz$tm[[k]])[2]
+    expect_false(is.nan(v))
+    expect_equal(v, 0, tolerance = 1e-12)
+  }
+})

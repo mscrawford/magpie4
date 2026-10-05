@@ -60,7 +60,7 @@
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|+\|Edge degradation | Mt CO2/yr | PER-COHORT edge emission E'' (model version L4, spec amendment 2026-09-20): the change of the committed edge deficit on the standing, AGED cohorts, sum_ac Atilde_ac,t (dd_ac,t - dd_src(ac),t-1) with Atilde the previous step's age distribution advanced by the step's cohort shift, so it sits on the previous step's area and carries no area movement at all (that is Area transfer). Its two + children are Fragmentation-driven and Foregone growth. Under landCarbonSinkType = "internal" re-attributed from Indirect into Land-use Change, so net Land is the model's own total
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Fragmentation-driven | Mt CO2/yr | F'' = sum_ac Atilde_ac,t (g_t - g_t-1) rho_ac,t: the applied deficit fraction (the edge fraction) changing, per cohort, evaluated at the current density - so the Bennet interaction of the two changes sits here, as in the pool-level convention
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|+\|Foregone growth | Mt CO2/yr | G'' = sum_ac Atilde_ac,t g_t-1 (rho_ac,t - rho_src(ac),t-1): each cohort's growth along its own curve at the previous step's exposure. Fragmentation-driven + Foregone growth = Edge degradation exactly. Unlike the interim pool-level split this carries no cohort turnover: harvest resets and conversion selectivity are area movements and sit in Area transfer
-#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Committed stock | Mt CO2 | Committed edge carbon deficit on the solved natural forest (primforest, secdforest, youngsecdf and the natural-curve ndc/aff afforestation pools); a stock, not a flow
+#' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Committed stock | Mt CO2 | Committed edge carbon deficit on the solved natural forest (primforest, secdforest, youngsecdf, the natural-curve ndc/aff afforestation pools and, where the model has it, other planted forest); a stock, not a flow
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer | Mt CO2/yr | T'' = sum_ac dd_ac,t (A_ac,t - Atilde_ac,t): every per-class area change at the class's OWN deficit density - harvest resets, conversions in and out, disturbance resets, establishment. Edge degradation + Area transfer = the change of the committed stock, exactly. Not an emission line: that carbon is booked in land-use change at reduced density
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Harvest resets | Mt CO2/yr | Informational sub-line of Area transfer, no +: the clear-cut reset, g_t (hvBack_t - sum_ac rho_ac,t hv_ac,t) over every pool with an exported harvest. Secondary forest is re-established over the first k_t age classes and so partly comes back; harvested primforest (reclassified as secondary forest) and harvested young secondary forest (which re-enters othernat) do not, so for those pools the whole harvested deficit leaves
 #' Emissions\|CO2\|Land\|Land-use Change\|Forest degradation\|Edge degradation\|Area transfer\|Conversions | Mt CO2/yr | Informational sub-line of Area transfer, no +: area genuinely leaving a pool, -g_t sum_ac rho_ac,t (red_ac,t - hv_ac,t) from the per-class reduction exports of secdforest and youngsecdf and the scalar reduction of primforest. The harvest is subtracted because the reduction bounds it from above, so counting both would double-count the leaving side
@@ -765,7 +765,8 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE, legacyEmi
   # Forest degradation by edge effects: COMMITTED-STOCK ACCOUNTING (model version L4, 2026-09).
   #
   # The model carries the edge effect in its own stock: 35_natveg multiplies the natural-forest vegc densities by a
-  # retention factor (1 - g) before the solve, 32_forestry does the same for the natural-curve afforestation pools,
+  # retention factor (1 - g) before the solve, 32_forestry does the same for the natural-curve afforestation pools
+  # (ndc, aff) and for other planted forest (other_planted, the pool of the develop merge of 2026-10),
   # so every carbon flow the model books already contains the edge effect, once and instantly. The committed edge
   # carbon stock (the deficit) on the SOLVED land, D = sum_p g_p rho_p A_p, is exported by GAMS at postsolve per
   # pool, age class and driver (p35_degr_committed, p32_degr_committed) together with the unreduced densities.
@@ -948,6 +949,36 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE, legacyEmi
             # the afforestation pools are not clear-cut and have no per-class reduction export, so their whole T''
             # sits in "other transitions" (no ov32_hvarea / ov32_land_reduction per age class in the gdx)
             hvC0 = NULL, hvBack = NULL, redC0 = NULL)
+        }
+        # other_planted: the forestry pool the develop merge of 2026-10 added (magpie PR #917). It grows on a
+        # natveg-derived curve and takes the degradation factor like ndc (32_forestry presolve), so it is an edge
+        # pool. Selected by PRESENCE in the export's type32 names: a gdx written before the merge has no such
+        # pool and never reaches the reads below. Unlike ndc and aff it is clear-cut and replanted to itself
+        # (harvest32), in full or in part: see .edgeReplantedHarvest for what the model does and how the two
+        # harvest sub-lines mirror it. Its cohort advance is the same shift as every type32 pool's (s32_shift).
+        if ("other_planted" %in% getNames(committed32, dim = 1)) {
+          p <- "other_planted"
+          a32 <- collapseNames(for32L[, , p])
+          rho32 <- collapseNames(unred32[, , p])
+          d32 <- dimSums(committed32[, , p], dim = 3)
+          hv32 <- collapseNames(.lvl("ov32_hvarea_forestry")[, , p])     # (j, t, ac)   Mha, class harvested from
+          replant32 <- dimSums(.lvl("ov32_land_replant")[, , p], dim = 3) # (j, t)       Mha, back into ac_est
+          hvTerms <- .edgeReplantedHarvest(hv32, rho32, replant32, acShift)
+          # The applied fraction: 32_forestry exports ONE, p32_degr_applied(t,j,ac), shared by its reduced pools and
+          # ac-invariant like the secdforest factor it copies (read at acx, as for the natural pools; the terms
+          # function refuses it where it disagrees with D / C0). A harvestable pool can be emptied in a cluster,
+          # which is the case the exported fraction is needed for. Used only where the pool carries a deficit:
+          # with the haircut off, or on a model state that does not reduce this pool, D is 0 and so is D / C0.
+          applied32 <- .par("p32_degr_applied", required = FALSE)
+          g32 <- NULL
+          if (!is.null(applied32) && any(d32 != 0, na.rm = TRUE)) g32 <- dimSums(applied32[, , "acx"], dim = 3)
+          pools[["forestry_other_planted"]] <- .edgeCommittedStockTerms(
+            D  = d32,
+            A  = dimSums(for32L[, , p], dim = 3),
+            C0 = dimSums(rho32 * a32, dim = 3),
+            C0adv = .edgeAdvancedC0(a32, rho32, acShift),
+            g = g32, poolName = "forestry_other_planted",
+            hvC0 = hvTerms$hvC0, hvBack = hvTerms$hvBack, redC0 = hvTerms$redC0)
         }
       }
       terms <- lapply(c(S = "S", E = "E", F = "F", G = "G", H = "H", Hharvest = "Hharvest", T = "T",

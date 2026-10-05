@@ -1151,8 +1151,9 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # Relaxed only for a LEGACY natural-origin gdx without the exported blend. A gdx with no natural-origin
         # apparatus at all (single secondary-forest curve, the model since the develop merge of 2026-10) has
         # nothing to emulate, so its above-ground rebuild is exact and is checked like the blend-based one.
-        # Three gdx families: (1) blend exported: strict; (2) natural-origin area without the blend: relaxed;
-        # (3) neither symbol: strict. Family 3 is the single-curve model AND every gdx older than the
+        # Three gdx families: (1) the blend can be rebuilt (secdforestNatural is not NULL: the exported blend
+        # and the symbols it needs): strict; (2) natural-origin area without it: relaxed, and only under dynSom;
+        # (3) no natural-origin symbol at all: strict. Family 3 is the single-curve model AND every gdx older than the
         # natural-origin apparatus, upstream's test fixture included; the full upstream tests on that fixture
         # decide whether family 3 has to be split.
         legacyNaturalOrigin <- !is.null(readGDX(gdx, "p35_secdforest_natural", react = "silent"))

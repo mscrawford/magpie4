@@ -17,7 +17,6 @@
 #' @author David M Chen
 #' @seealso \code{\link{Emissions}}, \code{\link{emisCO2}}
 #' @importFrom magclass collapseNames mbind dimSums dimOrder add_dimension add_columns setNames getItems getYears new.magpie
-#' @importFrom magpie4 Emissions emisCO2 production croparea land
 #' @examples
 #' \dontrun{
 #'   x <- productEmissions(gdx, unit = "GWP100AR6", level = "reg")
@@ -34,43 +33,40 @@ productEmissions <- function(gdx, unit = "GWP100AR6", level = "reg", perTonne = 
   # ==============================================================================
   # CO2 EMISSIONS BY PRODUCT
   # ==============================================================================
-  # CO2 emissions from land-use change and degradation are allocated to products
-  # based on cropland and pasture area shares
-  # TODO: Include regrowth, wood storage, peatland emissions
+  # CO2 emissions from land-use change (deforestation + other-land conversion) and peatland
+  # are allocated to products based on cropland and pasture area shares.
+  # TODO: Include regrowth, wood storage
 
-  # Get CO2 emissions at cellular level (for spatial allocation)
-  emis <- emisCO2(gdx, level = "cell", unit = "element")
+  # ---- All CO2 attributed at REGIONAL level (averaged across the regional crop mix,
+  emisReg <- emisCO2(gdx, level = "reg", unit = "element")   # regional land CO2 by process (Mt C)
 
-  # Get cropland and pasture areas for allocation
-  cropArea <- croparea(gdx, level = "cell", product_aggr = FALSE, water_aggr = TRUE)
-  pastArea <- land(gdx, level = "cell")[, , "past"]
-  getItems(pastArea, dim = 3) <- "pasture"  # rename to match kve set / trade naming
-  agArea <- mbind(cropArea, pastArea)
+  # Regional agricultural areas and allocation shares
+  cropAreaReg <- croparea(gdx, level = "reg", product_aggr = FALSE, water_aggr = TRUE)
+  pastAreaReg <- land(gdx, level = "reg", types = "past", subcategories = FALSE)
+  getItems(pastAreaReg, dim = 3) <- "pasture"                # match kve set / trade naming
+  agAreaReg   <- mbind(cropAreaReg, pastAreaReg)
+  ratioAgReg  <- agAreaReg / dimSums(agAreaReg, dim = 3)     # crop + pasture area share
+  ratioAgReg[is.na(ratioAgReg)] <- 0
 
-  # Calculate agricultural land shares (for proportional allocation)
-  agAreaTotal <- dimSums(agArea, dim = 3)
-  agAreaTotal[agAreaTotal == 0] <- 1  # avoid division by zero
-  ratioAg <- agArea / agAreaTotal
-  ratioAg[is.na(ratioAg)] <- 0
+  # Land-use-change CO2 from converting natural ecosystems to agriculture (deforestation +
+  # other-land conversion), spread across the region's crops + pasture by area share.
+  lucRegTot <- dimSums(emisReg[, , c("lu_deforestation", "lu_other_conversion")], dim = 3)
+  lucEmis   <- lucRegTot * ratioAgReg
+  lucEmis   <- add_dimension(lucEmis, dim = 3.1, add = "type", nm = "lu")
+  lucEmis   <- add_dimension(lucEmis, dim = 3.2, add = "pollutants", nm = "co2_c")
 
-  # Allocate land-use change emissions (lu_som_luc) to products by agricultural land share
-  lucEmis <- emis[, , "lu_som_luc"] * ratioAg
-  lucEmis <- add_dimension(lucEmis, dim = 3.2, add = "pollutants", nm = "co2_c")
+  # Peatland CO2 (drained organic soils) is NOT part of emisCO2. Attributed across
+  # the region's crops AND pasture by agricultural-area share (ratioAgReg), because
+  # peat is drained for both cropland and managed pasture; a crop-only split would
+  # load all peat CO2 onto crops even in regions where pasture drives the drainage.
+  peatCO2 <- collapseNames(Emissions(gdx, level = "reg", type = "co2_c", unit = "element",
+                                     subcategories = TRUE)[, , "peatland"])
+  peatCO2byProduct <- peatCO2 * ratioAgReg
+  peatCO2byProduct <- add_dimension(peatCO2byProduct, dim = 3.1, add = "type", nm = "peatland")
+  peatCO2byProduct <- add_dimension(peatCO2byProduct, dim = 3.2, add = "pollutants", nm = "co2_c")
 
-  # Degradation emissions allocated only to cropland (not pasture)
-  cropAreaTotal <- dimSums(cropArea, dim = 3)
-  cropAreaTotal[cropAreaTotal == 0] <- 1  # avoid division by zero
-  ratioCrop <- cropArea / cropAreaTotal
-  ratioCrop[is.na(ratioCrop)] <- 0
-
-  degradEmis <- emis[, , "lu_degrad"] * ratioCrop
-  degradEmis <- add_dimension(degradEmis, dim = 3.2, add = "pollutants", nm = "co2_c")
-
-  # Combine CO2 emissions
-  cByProduct <- mbind(lucEmis, degradEmis)
-
-  # Aggregate from cellular to regional level
-  cByProduct <- dimSums(cByProduct, dim = 1.2)
+  # Combine CO2 emissions (all already regional): LUC conversion + peatland (no degradation)
+  cByProduct <- mbind(lucEmis, peatCO2byProduct)
 
   # ==============================================================================
   # CH4 EMISSIONS BY PRODUCT
@@ -133,31 +129,15 @@ productEmissions <- function(gdx, unit = "GWP100AR6", level = "reg", perTonne = 
 
   ch4ResBurn <- a[, , "resid_burn"] * resBurnShr
 
-  # --- Peatland CH4: allocate by crop area in peatland cells ---
-  ch4peatland <- a[, , "peatland"]
-  cropCluster <- croparea(gdx, level = "cell", product_aggr = FALSE, water_aggr = TRUE)
-  peatCluster <- PeatlandArea(gdx, level = "cell")[, , "degrad"]
-
-  # Get crop area only in cells with degraded peatland
-  # Weight crop area by the fraction of cell that is degraded peatland
-  cellArea <- dimSums(land(gdx, level = "cell"), dim = 3)
-  cellArea[cellArea == 0] <- 1  # avoid division by zero
-  peatFrac <- peatCluster / cellArea
-  peatFrac[is.na(peatFrac)] <- 0
-
-  # Crop area weighted by peatland presence
-  cropInPeat <- cropCluster * peatFrac
-
-  # Aggregate to regional level and calculate shares
-  cropInPeatReg <- dimSums(cropInPeat, dim = 1.2)
-  cropInPeatTotal <- dimSums(cropInPeatReg, dim = 3)
-  cropInPeatTotal[cropInPeatTotal == 0] <- 1  # avoid division by zero
-  cropInPeatShr <- cropInPeatReg / cropInPeatTotal
-  cropInPeatShr[is.na(cropInPeatShr)] <- 0
-
-  # Allocate peatland CH4 to crops
-  ch4Peat <- ch4peatland * cropInPeatShr
-  ch4Peat <- collapseNames(ch4Peat, collapsedim = "data")
+  # --- Peatland CH4: allocate across the region's crops AND pasture by REGIONAL
+  #     agricultural-area share (ratioAgReg, defined in the CO2 section) rather than
+  #     by crop area in the specific peat cells, so regional drainage pressure is
+  #     spread across the whole regional crop + pasture mix (peat is drained for both) ---
+  # NB do NOT collapseNames() here: keep the "peatland" source name so this component has the
+  # same two dim-3 subdimensions (source.product) as its mbind siblings. Collapsing leaves one
+  # subdim, mbind then pads the mismatch with NA and the whole peat CH4 is dumped into a spurious
+  # product named "NA" (totals still conserve, but per-product allocation is wrong).
+  ch4Peat <- a[, , "peatland"] * ratioAgReg
 
   # Combine all CH4 emissions by product
   ch4ByProduct <- mbind(ch4EntFerm, ch4Awms, ch4Rice, ch4ResBurn, ch4Peat)
@@ -206,8 +186,11 @@ productEmissions <- function(gdx, unit = "GWP100AR6", level = "reg", perTonne = 
   nAwmsConf <- awmsN2o * confNShr
 
 
-  # --- Peatland N2O emissions: same as CH4, by crop area in peatland cells ---
-  nPeat <- n2oEmis[, , "peatland"] * collapseNames(cropInPeatShr, 2)
+  # --- Peatland N2O: allocate across the region's crops and pasture by REGIONAL
+  #     agricultural-area share (ratioAgReg), consistent with peatland CO2/CH4 above ---
+  # NB do NOT collapseNames() here (see the peatland CH4 note above): preserve the two-subdim
+  # "peatland.<product>" structure so mbind aligns and peat N2O is not dumped into an "NA" product.
+  nPeat <- n2oEmis[, , "peatland"] * ratioAgReg
 
 
   # Combine all N emissions by product (only non-NULL components)

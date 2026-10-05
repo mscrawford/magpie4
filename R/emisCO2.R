@@ -88,6 +88,14 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
     #
     # A gdx without p35_carbon_density_secdforest (upstream develop, pre-PR#876 runs) keeps the previous code
     # path unchanged, postsolve share and all.
+    #
+    # SINCE THE DEVELOP MERGE OF 2026-10 (magpie PR #917, magpie4 PR #143) the model has ONE secondary-forest
+    # curve: no blend, no natural-origin area, no uncalibrated copy. On such a gdx all three symbols are absent,
+    # this block returns NULL, the natural-origin correction and the cohort split below are skipped, and the
+    # secdforest density is pm_carbon_density_secdforest_ac as exported, which the edge fork's 35_natveg presolve
+    # reduces in place and which q35_carbon_secdforest reads. The block is KEPT, guarded as it is, for the gdx
+    # written before that merge (the L3 suite, the L4 gate pair, the SSP2 twin cube): they carry the blend and
+    # cannot be re-rendered correctly without it.
     secdforestBlend <- readGDX(gdx, "p35_carbon_density_secdforest", react = "silent")
 
     # (j,t,ac) presolve natural-origin area in Mha and the haircut-consistent vegc density gap in tC/ha,
@@ -263,6 +271,8 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # natural-origin cohorts are handled by the correction in calculateMainEmissions and the cohort
         # split in calculateRegrowthEmissions, which keeps the composition drift in land-use change.
         # See the note in CONSTANTS.
+        # On a single-curve gdx (develop merge of 2026-10) this parameter is the whole secdforest density and
+        # carries the degradation factor already (reduced in place by 35_natveg presolve).
         secdforest <- readGDX(gdx, "pm_carbon_density_secdforest_ac", "pm_carbon_density_ac",
                               format = "first_found")[, years, ]
         secdforest <- add_dimension(secdforest, dim = 3.1, add = "land", nm = "secdforest")
@@ -421,12 +431,12 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
             t <- .dimSumAC(t)
         }, areas, densities)
 
-        # Natural-origin secdforest correction (PR#876): the GAMS model uses a
-        # blended carbon density that applies the uncalibrated natveg curve to
-        # natural-origin cohorts (p35_secdforest_natural). Correct totalStock,
-        # emisNet, and emisArea to match vm_carbon_stock(secdforest).
-        # Only vegc is affected (M52 calibration only modifies vegc).
-        # Falls back gracefully when parameters are absent (develop compatibility).
+        # Natural-origin secdforest correction (PR#876), legacy gdx only: older model versions
+        # tracked natural-origin secdforest cohorts (p35_secdforest_natural) and applied a separate
+        # uncalibrated natveg carbon density to them, so totalStock, emisNet and emisArea are corrected
+        # here to match vm_carbon_stock(secdforest). Only vegc is affected. The current
+        # (wood-carbon-decoupled) model uses a single carbon curve and drops this apparatus, so both
+        # parameters are absent (readGDX returns NULL) and the correction is skipped.
         #
         # DEFECT FIX 2026-09-20 (see the note in CONSTANTS): where the exported blend is available the
         # natural-origin area is the PRESOLVE one recovered from it and the gap is haircut-consistent
@@ -571,11 +581,21 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         densityMtC   <- densities$forestry[, , agPools]
         reductionMha <- readGDX(gdx, "ov32_land_reduction", select = list(type = "level"), react = "silent")
         getSets(reductionMha)["d3.1"] <- "land"
-        getNames(reductionMha, dim = 1) <- c("forestry_aff", "forestry_ndc", "forestry_plant")
+        # robust to the number of forestry sub-pools (some gdx files add "other_planted")
+        getNames(reductionMha, dim = 1) <- paste("forestry", getNames(reductionMha, dim = 1), sep = "_")
 
-        # Only plantations are subject to harvesting
+        # Harvestable forestry pools. On gdx files with a single harvestable pool, ov32_hvarea_forestry
+        # has no pool sub-dimension and is entirely timber plantations. When the forestry harvest is split
+        # by pool (e.g. timber plantations and other planted forest), each land pool carries its own carbon
+        # density (densities$forestry then also includes forestry_other_planted), so harvest emissions are
+        # attributed with the correct density for each pool.
         harvestMha <- readGDX(gdx, "ov32_hvarea_forestry", select = list(type = "level"), react = "silent")
-        harvestMha <- add_dimension(harvestMha, dim = 3.1, add = "land", nm = "forestry_plant")
+        if ("plant" %in% getItems(harvestMha, dim = 3.1)) {
+          getSets(harvestMha)["d3.1"] <- "land"
+          getNames(harvestMha, dim = 1) <- paste("forestry", getNames(harvestMha, dim = 1), sep = "_")
+        } else {
+          harvestMha <- add_dimension(harvestMha, dim = 3.1, add = "land", nm = "forestry_plant")
+        }
         harvestMha <- add_columns(harvestMha, addnm = "forestry_aff", dim = "land", fill = 0)
         harvestMha <- add_columns(harvestMha, addnm = "forestry_ndc", dim = "land", fill = 0)
 
@@ -765,10 +785,11 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
 
         recoveredForest <- readGDX(gdx, "p35_maturesecdf", "p35_recovered_forest", format = "first_found") * -1
 
-        # Split secdforest regrowth by cohort origin (PR#876).
-        # Natural-origin cohorts follow the uncalibrated natveg curve;
-        # existing/managed cohorts follow the FRA-calibrated curve.
-        # Falls back to single-density calculation for older gdx files.
+        # Split secdforest regrowth by cohort origin (PR#876), legacy gdx only: where the model tracked
+        # natural-origin cohorts, those followed the uncalibrated natveg curve and existing/managed
+        # cohorts the FRA-calibrated curve. The current (wood-carbon-decoupled) model uses a single
+        # carbon curve and drops this split (both parameters absent), so the single-density else-branch
+        # below is used.
         p35NaturalRaw <- readGDX(gdx, "p35_secdforest_natural", react = "silent")
         densityUncalibRaw <- readGDX(gdx, "pm_carbon_density_secdforest_ac_uncalib", react = "silent")
 
@@ -893,7 +914,8 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         disturbanceLossAcEst <- dimSums(disturbanceLoss, dim = 3.2)
         getSets(disturbanceLossAcEst)["d3.1"] <- "land"
 
-        forestryNames <- c("forestry_aff", "forestry_ndc", "forestry_plant")
+        # robust to the number of forestry sub-pools (some gdx files add "other_planted")
+        forestryNames <- paste("forestry", getNames(reduction, dim = 1), sep = "_")
         getNames(reduction, dim = 1)            <- forestryNames
         getNames(expansion, dim = 1)            <- forestryNames
         getNames(disturbanceLoss, dim = 1)      <- forestryNames
@@ -1115,7 +1137,8 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # above-ground rebuild was never checked at all. That is why the 490 MtC secdforest vegc error
         # documented in CONSTANTS shipped silently. vegc and litc are now compared per land type, cell and
         # year, at the same 1e-03 MtC tolerance, but ONLY where the exported secdforest blend is available
-        # (secdforestNatural): that is what makes the above-ground reconstruction exact. Without the blend
+        # (secdforestNatural) or the model tracks no natural-origin cohorts at all: either makes the above-ground
+        # reconstruction exact. With natural-origin cohorts but without the blend
         # the reconstruction still carries the known presolve/postsolve share mismatch on time steps longer
         # than the age-class width (up to ~20 MtC on a 10-year step), so those gdx keep the old soilc-only
         # relaxation and do not start warning. soilc itself keeps the relaxed, summed-over-land-type
@@ -1125,7 +1148,11 @@ emisCO2 <- function(gdx, file = NULL, level = "cell", unit = "gas",
         # Without dynSom every pool, soilc included, is compared elementwise as before.
         cPoolsCheck  <- getItems(totalStock, dim = "c_pools")
         cPoolsStrict <- if (dynSom) setdiff(cPoolsCheck, "soilc") else cPoolsCheck
-        if (dynSom && is.null(secdforestNatural)) cPoolsStrict <- character(0)
+        # Relaxed only for a LEGACY natural-origin gdx without the exported blend. A gdx with no natural-origin
+        # apparatus at all (single secondary-forest curve, the model since the develop merge of 2026-10) has
+        # nothing to emulate, so its above-ground rebuild is exact and is checked like the blend-based one.
+        legacyNaturalOrigin <- !is.null(readGDX(gdx, "p35_secdforest_natural", react = "silent"))
+        if (dynSom && is.null(secdforestNatural) && legacyNaturalOrigin) cPoolsStrict <- character(0)
         stockMismatch <- FALSE
         if (length(cPoolsStrict) > 0 &&
             any(abs(totalStock[, , cPoolsStrict] - totalStockCheck[, , cPoolsStrict]) > 1e-03,

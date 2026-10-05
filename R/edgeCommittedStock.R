@@ -133,7 +133,10 @@
 #'         by the replanted share s = replant / harvested area, the same for every class: T''_harvest =
 #'         g_t (rhoEst_t replant_t - s_t hvC0_t) is the reset (area-neutral for the pool) and T''_conv =
 #'         -g_t (1 - s_t) hvC0_t the harvested area that is not replanted. With s = 1 this is the secondary-forest
-#'         case. See \code{.edgeReplantedHarvest}.
+#'         case. Under EXOGENOUS harvest (\code{s32_hvarea} = 1) the model exports replant = 0 although every
+#'         harvested hectare is re-established (q32_land_replant carries \code{$s32_establishment_dynamic}, which
+#'         is 0 there, while q32_establishment_fixed holds the pool's area constant), so in that mode the
+#'         replanted area is the harvested area itself, s = 1. See \code{.edgeReplantedHarvest}.
 #'   \item T''_other = T'' - T''_harvest - T''_conv: establishment from other sources (primforest harvest
 #'         reclassified, restoration), youngsecdf maturation, conversions IN, and the disturbance redistribution -
 #'         the latter because \code{red} is measured against the post-disturbance presolve state while Atilde is
@@ -178,8 +181,10 @@
 #'
 #' @param g the pool's applied deficit fraction per cluster and step (same shape; dimensionless), from
 #'   \code{p35_degr_applied} at age class \code{acx} - the value is ac-invariant for secdforest and other and is
-#'   carried in \code{acx} alone for primforest, so \code{acx} reads all three. NULL falls back to D / C0, which
-#'   is correct only while the pool has carbon: pass it wherever the export exists. Checked against D / C0 to
+#'   carried in \code{acx} alone for primforest, so \code{acx} reads all three. For the forestry pools the
+#'   export is \code{p32_degr_applied(t,j,ac)}, one fraction shared by the reduced pools of 32_forestry: the
+#'   report passes it for \code{other_planted} and leaves \code{ndc} and \code{aff} on NULL. NULL falls back to
+#'   D / C0, which is correct only while the pool has carbon. Checked against D / C0 to
 #'   1e-8 wherever C0 > 0, so the export and the stock identity stay tied. Used for the PER-COHORT pair and its
 #'   sub-lines only - the pool-level continuity terms keep D / C0 whatever is passed here.
 #' @param poolName pool label used only in that check's error message
@@ -427,13 +432,21 @@
 #'   per class and the replanted area per cluster, NOT which classes the replanted hectares were cut from, so the
 #'   harvested carbon is attributed to "reset" and "leaving" by the replanted share of the harvested AREA, equal
 #'   for all classes. That split is a convention of the two informational sub-lines; their sum, T'' and both
-#'   identities do not depend on it. Internal.
+#'   identities do not depend on it. STATIC ESTABLISHMENT: with \code{s32_hvarea} = 1 (presolve.gms sets
+#'   s32_establishment_static = 1, s32_establishment_dynamic = 0) the right-hand side of q32_land_replant is
+#'   switched off, so \code{ov32_land_replant} is 0, while q32_establishment_fixed keeps the pool's total area
+#'   and the establishment classes start the solve empty: the area established equals the area harvested,
+#'   exactly. \code{static = TRUE} therefore takes the harvested area as the replanted area and ignores the
+#'   export. Internal.
 #' @param hvAc harvested area per cluster, step and age class (magpie, cells x years x ac; Mha): the pool's slice
 #'   of \code{ov32_hvarea_forestry}
 #' @param rhoAc unreduced vegc density of the pool per cluster, step and age class (same shape; tC/ha)
 #' @param replant replanted area per cluster and step (magpie, cells x years x 1; Mha): the pool's slice of
-#'   \code{ov32_land_replant}
+#'   \code{ov32_land_replant}. Not used when \code{static} is TRUE
 #' @param shift cohort shift per step from .edgeAcShift (NA first)
+#' @param static TRUE where the model re-establishes all harvested area without exporting it as replanted
+#'   (\code{s32_hvarea} = 1); FALSE (default) where \code{ov32_land_replant} is the replanted area
+#'   (\code{s32_hvarea} = 2)
 #' @return list of magpie objects (cells x years x 1; Mio tC): \code{hvC0} the replanted share of the harvested
 #'   unreduced carbon, \code{hvBack} the unreduced carbon the replanted area re-enters with (establishment-class
 #'   mean density x replanted area), \code{redC0} all of the harvested unreduced carbon (= the pool's whole
@@ -441,12 +454,36 @@
 #' @author Michael Crawford
 #' @keywords internal
 #' @noRd
-.edgeReplantedHarvest <- function(hvAc, rhoAc, replant, shift) {
-  replant <- magclass::dimSums(replant, dim = 3)
+.edgeReplantedHarvest <- function(hvAc, rhoAc, replant, shift, static = FALSE) {
+  hvArea <- magclass::dimSums(hvAc, dim = 3)
+  replant <- if (static) hvArea else magclass::dimSums(replant, dim = 3)
   hvRho <- .edgeHarvestC0(hvAc, rhoAc)
-  share <- replant / magclass::dimSums(hvAc, dim = 3)
+  share <- replant / hvArea
   share[!is.finite(share)] <- 0                          # nothing harvested: nothing to split
   list(hvC0 = share * hvRho,
        hvBack = .edgeEstRho(rhoAc, shift) * replant,
        redC0 = hvRho)
+}
+
+#' @title edgeUnbookedDeficit
+#' @description Stops when a committed-deficit export carries a non-zero deficit on a pool the report does not
+#'   book. The edge block selects its pools by NAME, so a pool that starts to take the degradation factor in the
+#'   model (a new forestry type, timber plantations, the forestry member of land_timber) would otherwise drop out
+#'   of S, E'' and T'' without a trace. Internal.
+#' @param x a committed-deficit export whose first sub-dimension of dim 3 is the pool
+#'   (\code{p35_degr_committed}: land_timber.ac.degr35; \code{p32_degr_committed}: type32.ac)
+#' @param booked pool names the report books from this export
+#' @param symbol the export's name, for the message
+#' @return NULL, invisibly
+#' @author Michael Crawford
+#' @keywords internal
+#' @noRd
+.edgeUnbookedDeficit <- function(x, booked, symbol) {
+  for (pool in setdiff(magclass::getNames(x, dim = 1), booked)) {
+    if (any(x[, , pool] != 0, na.rm = TRUE)) {
+      stop("reportEmissions (edge, L4): ", symbol, " carries a deficit on pool '", pool,
+           "', which the edge report does not book (booked: ", paste(booked, collapse = ", "), ")")
+    }
+  }
+  invisible(NULL)
 }

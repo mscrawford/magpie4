@@ -477,11 +477,11 @@ test_that("a supplied applied fraction that disagrees with D / C0 is refused", {
 # pool; every per-class reduction of such a pool is harvest. .edgeReplantedHarvest builds the three harvest inputs
 # from the two exports (ov32_hvarea_forestry per class, ov32_land_replant per cluster).
 
-.replantTerms <- function(s, years, hvMat, replantVec) {
+.replantTerms <- function(s, years, hvMat, replantVec, static = FALSE) {
   shift <- magpie4:::.edgeAcShift(years)
   replant <- new.magpie(magclass::getItems(s$A, dim = 1), years, NULL, fill = 0)
   replant[, , ] <- replantVec
-  h <- magpie4:::.edgeReplantedHarvest(.acMat(s, years, hvMat), s$rhoAc, replant, shift)
+  h <- magpie4:::.edgeReplantedHarvest(.acMat(s, years, hvMat), s$rhoAc, replant, shift, static = static)
   tm <- magpie4:::.edgeCommittedStockTerms(D = s$D, A = s$A, C0 = s$C0,
                                            C0adv = magpie4:::.edgeAdvancedC0(s$Aac, s$rhoAc, shift),
                                            g = s$g, poolName = "forestry_other_planted",
@@ -558,4 +558,44 @@ test_that("a forestry pool with no harvest in a step, or with no deficit at all,
     expect_false(is.nan(v))
     expect_equal(v, 0, tolerance = 1e-12)
   }
+})
+
+test_that("static establishment: an exported replant of 0 is a full reset, not a conversion (audit F10)", {
+  # s32_hvarea = 1: q32_land_replant is switched off (ov32_land_replant = 0) while q32_establishment_fixed keeps
+  # the pool's area, so every harvested hectare is re-established. Read as exported, the rotation harvest would
+  # be booked as area leaving the pool.
+  years <- c("y2060", "y2070")
+  acs   <- c("ac0", "ac5", "ac10", "acx")
+  s <- .acSynth(years, acs, rbind(c(1, 1, 2, 6), c(2.5, 2.5, 1, 4)), rbind(c(0, 5, 10, 50), c(0, 6, 12, 60)),
+                c(0.1, 0.1))
+  hv <- rbind(c(0, 0, 0, 0), c(0, 0, 0, 5))
+  asExported <- .replantTerms(s, years, hvMat = hv, replantVec = c(0, 0), static = FALSE)
+  static     <- .replantTerms(s, years, hvMat = hv, replantVec = c(0, 0), static = TRUE)
+  expect_equal(as.vector(asExported$tm$TpcConv)[2], -0.1 * 60 * 5, tolerance = 1e-10)       # the mis-booking
+  expect_equal(as.vector(static$tm$TpcConv)[2], 0, tolerance = 1e-12)
+  expect_equal(as.vector(static$tm$TpcHarv)[2], 0.1 * (3 * 5 - 60 * 5), tolerance = 1e-10)  # mean(0, 6) x 5 back
+  expect_equal(as.vector(static$tm$TpcOther)[2], 0, tolerance = 1e-10)
+  .expectReplantIdentities(static$tm, s)
+  # T'' and the headline do not depend on the mode, only the split between the two sub-lines does
+  expect_equal(as.vector(static$tm$Tpc)[2], as.vector(asExported$tm$Tpc)[2], tolerance = 1e-12)
+  expect_equal(as.vector(static$tm$Epc)[2], as.vector(asExported$tm$Epc)[2], tolerance = 1e-12)
+})
+
+test_that("a deficit on a pool the report does not book is refused, a zero one is not (audit F8)", {
+  x <- new.magpie(c("LAM.1", "SSA.2"), c("y2020", "y2025"),
+                  c("ndc.ac0", "ndc.acx", "plant.ac0", "plant.acx", "other_planted.ac0", "other_planted.acx"), fill = 0)
+  x[, , "ndc"] <- 2
+  x[, , "other_planted"] <- 1
+  booked <- c("ndc", "aff", "other_planted")
+  expect_silent(magpie4:::.edgeUnbookedDeficit(x, booked, "p32_degr_committed"))   # plant present, deficit 0
+  x["SSA.2", "y2025", "plant.acx"] <- 0.5
+  expect_error(magpie4:::.edgeUnbookedDeficit(x, booked, "p32_degr_committed"), "pool 'plant'")
+  # the 35 side: land_timber.ac.degr35, where the forestry member is declared but never reduced
+  y <- new.magpie("LAM.1", "y2020", c("primforest.acx.edge", "secdforest.acx.edge", "other.acx.edge",
+                                      "forestry.acx.edge"), fill = 1)
+  y[, , "forestry"] <- 0
+  expect_silent(magpie4:::.edgeUnbookedDeficit(y, c("primforest", "secdforest", "other"), "p35_degr_committed"))
+  y[, , "forestry"] <- 3
+  expect_error(magpie4:::.edgeUnbookedDeficit(y, c("primforest", "secdforest", "other"), "p35_degr_committed"),
+               "pool 'forestry'")
 })

@@ -870,6 +870,12 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE, legacyEmi
     unred32 <- .par("p32_vegc_unreduced")                        # (j, t, type32.ac)         tC/ha
     committed32 <- .par("p32_degr_committed", required = FALSE)  # (j, t, type32.ac) Mio tC; always in an L4 gdx (zero when the haircut is off)
 
+    # The pools below are selected by name: refuse a deficit on any pool they do not book (audit F8, 2026-10)
+    .edgeUnbookedDeficit(edgeCommitted35, c("primforest", "secdforest", "other"), "p35_degr_committed")
+    if (!is.null(committed32)) {
+      .edgeUnbookedDeficit(committed32, c("ndc", "aff", "other_planted"), "p32_degr_committed")
+    }
+
     # Drivers (degr35): one today; the report loops over them (several are refused above)
     drivers <- getNames(edgeCommitted35, dim = 3)
     driverLabel <- c(edge = "Edge degradation")
@@ -944,10 +950,11 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE, legacyEmi
             A  = dimSums(for32L[, , p], dim = 3),
             C0 = dimSums(rho32 * a32, dim = 3),
             C0adv = .edgeAdvancedC0(a32, rho32, acShift),
-            # 32_forestry exports no applied fraction, so these two keep the D / C0 fallback
+            # 32_forestry exports one applied fraction, p32_degr_applied(t,j,ac); these two do NOT read it and
+            # keep the D / C0 fallback of the L4.1 build, so their lines are unchanged (other_planted below reads it)
             g = NULL, poolName = paste0("forestry_", p),
-            # the afforestation pools are not clear-cut and have no per-class reduction export, so their whole T''
-            # sits in "other transitions" (no ov32_hvarea / ov32_land_reduction per age class in the gdx)
+            # the afforestation pools are not clear-cut (not in harvest32). A per-class reduction export exists
+            # (ov32_land_reduction) but is not used for them, so their whole T'' sits in "other transitions"
             hvC0 = NULL, hvBack = NULL, redC0 = NULL)
         }
         # other_planted: the forestry pool the develop merge of 2026-10 added (magpie PR #917). It grows on a
@@ -963,12 +970,24 @@ reportEmissions <- function(gdx, level = "regglo", storageWood = TRUE, legacyEmi
           d32 <- dimSums(committed32[, , p], dim = 3)
           hv32 <- collapseNames(.lvl("ov32_hvarea_forestry")[, , p])     # (j, t, ac)   Mha, class harvested from
           replant32 <- dimSums(.lvl("ov32_land_replant")[, , p], dim = 3) # (j, t)       Mha, back into ac_est
-          hvTerms <- .edgeReplantedHarvest(hv32, rho32, replant32, acShift)
+          # Establishment mode, from the flag that sets it (32_forestry presolve): s32_hvarea = 2 is dynamic and
+          # ov32_land_replant is the replanted area; s32_hvarea = 1 is static, where the model re-establishes
+          # every harvested hectare but exports replant = 0 (see .edgeReplantedHarvest). The flag is read rather
+          # than the two derived scalars because it is never 0 where there is harvest. Without a readable
+          # flag the mode is not guessed: the report stops if the pool was harvested at all.
+          hvMode32 <- as.numeric(readGDX(gdx, "s32_hvarea", react = "silent"))[1]
+          if (!isTRUE(hvMode32 %in% c(1, 2)) && any(hv32 != 0, na.rm = TRUE)) {
+            stop("reportEmissions (edge, L4): other_planted is harvested but s32_hvarea is not 1 or 2 in the GDX; ",
+                 "cannot tell whether the harvested area is re-established")
+          }
+          hvTerms <- .edgeReplantedHarvest(hv32, rho32, replant32, acShift, static = isTRUE(hvMode32 == 1))
           # The applied fraction: 32_forestry exports ONE, p32_degr_applied(t,j,ac), shared by its reduced pools and
           # ac-invariant like the secdforest factor it copies (read at acx, as for the natural pools; the terms
           # function refuses it where it disagrees with D / C0). A harvestable pool can be emptied in a cluster,
-          # which is the case the exported fraction is needed for. Used only where the pool carries a deficit:
-          # with the haircut off, or on a model state that does not reduce this pool, D is 0 and so is D / C0.
+          # which is the case the exported fraction is needed for. Passed only where the pool carries a deficit
+          # somewhere: with the haircut off, or on a model state that does not reduce this pool, the export is
+          # still non-zero for the pools that are reduced while this pool's D is 0, and the tie check would stop.
+          # Then g stays NULL and the terms function falls back to D / C0 = 0, as for ndc and aff.
           applied32 <- .par("p32_degr_applied", required = FALSE)
           g32 <- NULL
           if (!is.null(applied32) && any(d32 != 0, na.rm = TRUE)) g32 <- dimSums(applied32[, , "acx"], dim = 3)

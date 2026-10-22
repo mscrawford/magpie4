@@ -1,8 +1,15 @@
 #' @title reportFireEmissions.R
-#' @description reads land cover data and deforestation data to produce future estimates of non-CO2 fire
-#' emissions based on extrapolating GFED4.1s data from 2003-2016. Emissions are area x rho x emission factor,
-#' where rho (inst/extdata/GFED_regional_dm_rho_scaled.csv) is the regional GFED dry-matter mass of a fire
-#' partition per hectare of the MAgPIE class it is applied to; see the provenance file beside it.
+#' @description reads land cover, peatland and land-use transition data to produce future estimates of non-CO2
+#' fire emissions based on extrapolating GFED4.1s data from 2003-2016. Emissions are area x rho x emission
+#' factor, where rho (inst/extdata/GFED_regional_dm_rho_scaled.csv) is the regional GFED dry-matter mass of a
+#' fire partition per hectare of the historical area of the class it is applied to; see the provenance file
+#' beside it. The run's areas are: forest (primforest + secdforest + forestry) for boreal, temperate and
+#' small deforestation fires; past + other for savanna and grassland fires; crop for agricultural fires (not
+#' reported); the total peatland area of the peatland module (all land58 categories) for peat fires; and the
+#' gross forest -> non-forest conversion (primforest and secdforest to crop, past, urban and other, per year,
+#' from ov_lu_transitions) for large deforestation fires. Emission factors are GFED's (g per kg DM), with NOx
+#' converted from mass of NO to mass of NO2. Peat fires need the peatland realization v2 (ov58_peatland);
+#' without it the function stops.
 #' CO2 is not reported, to avoid double counting: deforestation-fire CO2 is part of the carbon stock loss in
 #' MAgPIE's land-use change CO2, and the LPJmL carbon densities behind MAgPIE's stocks come from a run with
 #' fire enabled.
@@ -35,7 +42,8 @@
 #' deforestation fires (large fires on gross forest conversion, small fires on forest area)
 #' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Grassland Burning | Mt X/yr | X from grassland/savanna
 #' fires
-#' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Peat Burning | Mt X/yr | X from peat fires
+#' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Peat Burning | Mt X/yr | X from peat fires (on total peatland
+#' area)
 #' @md
 
 
@@ -116,7 +124,7 @@ reportFireEmissions <- function(gdx, level = "reg") {
     return("Currently only supported for H12 regions")
   }
 
-  # Forest area (used for BORF, TEMF, PEAT, and DEFO_smallFires)
+  # Forest area (used for BORF, TEMF and DEFO_smallFires)
   area_forest <- dimSums(land[, , c("primforest", "secdforest", "forestry")], dim = 3) %>%
     dplyr::as_tibble() %>%
     dplyr::mutate(area = "area_forest")
@@ -152,8 +160,20 @@ reportFireEmissions <- function(gdx, level = "reg") {
     dplyr::rename(reg = "j") %>%
     dplyr::mutate(area = "area_defo")
 
+  # PEAT area: the run's total peatland area, all categories of the peatland module (land58), the
+  # table's PEAT denominator. Runs without ov58_peatland (peatland realization "off") are not supported.
+  peatland <- readGDX(gdx, "ov58_peatland", select = list(type = "level"), react = "silent")
+  if (is.null(peatland) || names(dimnames(peatland))[3] != "land58") {
+    stop("reportFireEmissions: PEAT fires need the peatland area ov58_peatland over land58 ",
+         "(peatland realization v2), which this GDX does not contain")
+  }
+  area_peat <- dimSums(peatland, dim = c(1.2, 3)) %>%
+    dplyr::as_tibble() %>%
+    dplyr::rename(reg = "j") %>%
+    dplyr::mutate(area = "area_peat")
+
   # Collect area data
-  areas <- dplyr::bind_rows(area_forest, area_sava, area_agri, area_defo) %>%
+  areas <- dplyr::bind_rows(area_forest, area_sava, area_agri, area_defo, area_peat) %>%
     dplyr::mutate(value = ifelse(.data$t == 1995, NA, .data$value))
 
   ###########################################################################
@@ -163,7 +183,7 @@ reportFireEmissions <- function(gdx, level = "reg") {
 
   # Simplified mapping with single forest area and DEFO split
   area_mapping <- dplyr::tibble(
-    area      = c("area_forest", "area_forest", "area_forest", "area_forest",
+    area      = c("area_forest", "area_forest", "area_forest", "area_peat",
                   "area_sava", "area_agri", "area_defo"),
     fire_type = c("BORF", "TEMF", "DEFO_smallFires", "PEAT",
                   "SAVA", "AGRI", "DEFO_largeFires")

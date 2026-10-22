@@ -32,7 +32,7 @@
 #' Emissions\|X\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Temperate Forest | Mt X/yr | X from temperate
 #' forest fires
 #' Emissions\|X\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Tropical Forest | Mt X/yr | X from tropical
-#' deforestation fires
+#' deforestation fires (large fires on gross forest conversion, small fires on forest area)
 #' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Grassland Burning | Mt X/yr | X from grassland/savanna
 #' fires
 #' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Peat Burning | Mt X/yr | X from peat fires
@@ -133,16 +133,20 @@ reportFireEmissions <- function(gdx, level = "reg") {
     dplyr::as_tibble() %>%
     dplyr::mutate(area = "area_agri")
 
-  # Read deforestation fluxes for DEFO_largeFires
-  primforestReductionMha <- readGDX(gdx, "ov35_primforest_reduction", select = list(type = "level"))
-  secdforestReductionMha <- dimSums(readGDX(gdx, "ov35_secdforest_reduction", select = list(type = "level")), dim = 3)
-  secdforestDegradMha    <- dimSums(readGDX(gdx, "p35_disturbance_loss_secdf", react = "silent"), dim = 3)
-
-  area_defo <- primforestReductionMha + secdforestReductionMha + secdforestDegradMha
+  # DEFO_largeFires area: the model's gross forest -> non-forest conversion (Mha/yr), primary and
+  # secondary forest to crop, pasture, urban and other land, the model counterpart of the observed
+  # tree cover loss for land use (GFW) that the table's DEFO_largeFires rho is per. Timber rotation
+  # (secondary forest reduction that regrows) and disturbance losses are not conversion and are not included.
+  luTransitions <- collapseNames(readGDX(gdx, "ov_lu_transitions")[, , "level"])
+  forestToNonForest <- as.vector(outer(c("primforest", "secdforest"), c("crop", "past", "urban", "other"),
+                                       paste, sep = "."))
+  if (!all(forestToNonForest %in% getNames(luTransitions)) || sum(abs(luTransitions)) == 0) {
+    stop("reportFireEmissions: forest -> non-forest flows not found in ov_lu_transitions")
+  }
   im_years <- collapseDim(m_yeardiff(gdx), dim = c(1, 3))
-  area_defo <- area_defo / im_years
+  area_defo <- dimSums(luTransitions[, , forestToNonForest], dim = 3) / im_years
 
-  # Regional deforestation, summed over clusters (for DEFO_largeFires)
+  # Regional gross forest conversion, summed over clusters (for DEFO_largeFires)
   area_defo <- dimSums(area_defo, dim = c(1.2, 3)) %>%
     dplyr::as_tibble() %>%
     dplyr::rename(reg = "j") %>%

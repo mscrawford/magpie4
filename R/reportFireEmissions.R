@@ -20,7 +20,8 @@
 #'   }
 #'
 #' @section Fire emission variables:
-#' Reported for X = BC, CO, NO2, OC, SO2, N2O, CH4, NH3 and VOC (no CO2).
+#' Reported for X = BC, CO, NO2 (NOx as mass of NO2), OC, SO2, N2O, CH4, NH3 and VOC (no CO2).
+#' Cumulative variables (Emissions\|X\|AFOLU\|Land\|Cumulative\|Fires...) are reported in Mt X.
 #'
 #' Name | Unit | Meta
 #' ---|---|---
@@ -81,6 +82,13 @@ reportFireEmissions <- function(gdx, level = "reg") {
   ef <- ef %>%
     dplyr::filter(.data$SPECIE %in% emissionFactorsSingleton) %>%
     dplyr::bind_rows(vocTotals)
+
+  # GFED gives NOx as mass of NO; MAgPIE reports NOx as mass of NO2 (Emissions.R, no2_n x 46 / 14),
+  # so the NOx factor is converted by M(NO2) / M(NO) = 46 / 30 before the rename to NO2 below
+  stopifnot(sum(ef$SPECIE == "NOx") == 1)
+  ef <- ef %>%
+    dplyr::mutate(dplyr::across(c("SAVA", "BORF", "TEMF", "DEFO", "PEAT", "AGRI"),
+                                ~ dplyr::if_else(.data$SPECIE == "NOx", .x * 46 / 30, .x)))
 
   # Add DEFO split columns (same emission factors for large and small fires)
   ef <- ef %>%

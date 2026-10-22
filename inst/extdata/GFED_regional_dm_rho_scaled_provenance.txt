@@ -1,29 +1,46 @@
 GFED_regional_dm_rho_scaled.csv - provenance
-created: 2026-10-22 08:42 CEST
-generator: github.com/mscrawford/Fire-Emissions, rho/run_rho.R at 0ad678dd9c4f0081ec65a753e6b99dd17f41ea4d 
-units: kg DM per m2 of class area per year; DEFO_largeFires per m2 deforested per year
+created: 2026-10-22 13:53 CEST
+generator: github.com/mscrawford/Fire-Emissions, rho/run_rho.R at c73b9534d6ad666cf15aeae395377c761619a5c5 
+units: kg DM per m2 of class area per year; PEAT per m2 of peatland; DEFO_largeFires per m2 of
+       tree cover lost to land use per year
 definition: rho(p, r) = mean annual GFED4.1s DM mass of partition p in H12 region r
-            / mean area of the MAgPIE class p is applied to (reference run, same years)
-classes: SAVA = past + other; BORF, TEMF, PEAT, DEFO_smallFires = primforest + secdforest + forestry;
-         AGRI = crop; DEFO_largeFires = primforest + secdforest reduction + secdforest disturbance loss
+            / historical area of the class p is applied to, over the same years
+denominators (historical data, not a model run):
+  BORF, TEMF, DEFO_smallFires: forest = primforest + secdforest + forestry
+  SAVA: past + range + primother + secdother; AGRI: crop
+    (these from LanduseInitialisation, avl_land_full_t_0.5.mz: 1995-2015 interpolated linearly
+     to annual values, constant after 2015, period mean)
+  PEAT: total peatland, all categories (intact, crop, past, forestry, peatExtract) of MAgPIE's
+    peatland input f58_peatland_area_0.5.mz (static)
+  DEFO_largeFires: GFW tree cover loss (UMD/Hansen, 30% canopy; gadm__tcl__iso_change v20260424)
+    for land use: the drivers Permanent agriculture, Hard commodities, Settlements & Infrastructure
+    and Shifting cultivation of the WRI/Google DeepMind driver map v1.13 (Sims et al. 2025, ERL 20,
+    074027); mean annual loss over the period; countries to H12 with madrat's regionmappingH12.csv
+    (share of the land-use loss in unmapped countries: 0.000493, XAD XKO Z01 Z06 Z07 ZNC)
+  gridded classes: 0.5 deg cells to H12 through the clustermap
 period: 2003-2016
-DEFO_largeFires: 0 below 0.01 Mha/yr deforestation; capped at 20.3 kg DM/m2 (capped: OAS )
-R: R version 4.5.0 (2025-04-11)
-inputs (md5):
-  113c7f7894e293e2c2e45210f1a81567 GFED/GFED4.1s_2003.hdf5
-  9018f9d8dc01865e72865ed3c5389581 GFED/GFED4.1s_2004.hdf5
-  4209f38d1e31647e9b4ee4157662589b GFED/GFED4.1s_2005.hdf5
-  4cfe1e7670c5fe98fed1554cc11fde87 GFED/GFED4.1s_2006.hdf5
-  6b9cae379320f4899954c65fd5c7f3be GFED/GFED4.1s_2007.hdf5
-  aa766f9085d083a14233190cf8734828 GFED/GFED4.1s_2008.hdf5
-  7dcd9ad0ddf2c810776f4cf3579d431b GFED/GFED4.1s_2009.hdf5
-  884d59637cc7660e688ab121ec86c85b GFED/GFED4.1s_2010.hdf5
-  0c6d00301fa2ed5873265ef13fb032f1 GFED/GFED4.1s_2011.hdf5
-  ef7150d828b00cef91c8aa6fea32717f GFED/GFED4.1s_2012.hdf5
-  b9100ee9d14f4426b13292adfcfe3b18 GFED/GFED4.1s_2013.hdf5
-  86d8a2217a54136e7a1150cb403f02af GFED/GFED4.1s_2014.hdf5
-  91b61f35b060bbdf08ccd2603683c4a0 GFED/GFED4.1s_2015.hdf5
-  b80ef935432a7a0b7aee6a9dd147d227 GFED/GFED4.1s_2016.hdf5
-  125f00dc370abd5787d5f12c759add78 clustermap_rev4.118_c200_67420_h12.rds
-  16776850460df7f93828e705b409c2bd C_SMIPv06-M-SSP2-NPi2025-def-mag-4_cell.land_0.5.mz
-  b417e95d080542f0bd7c1ee4d7e91055 C_SMIPv06-M-SSP2-NPi2025-def-mag-4_fulldata.gdx
+DEFO_largeFires: 0 below 0.01 Mha/yr land-use loss; capped at 20.3 kg DM/m2 (capped: none ; below the threshold: JPN, MEA, NEU )
+no floor: regions below the threshold get DEFO_largeFires = 0, also outside the tropics
+no fallback: regions without GFED DEFO small-fire mass get DEFO_smallFires = 0
+R: R version 4.3.2 (2023-10-31)
+inputs (md5, path, target):
+  113c7f7894e293e2c2e45210f1a81567 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2003.hdf5 
+  9018f9d8dc01865e72865ed3c5389581 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2004.hdf5 
+  4209f38d1e31647e9b4ee4157662589b /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2005.hdf5 
+  4cfe1e7670c5fe98fed1554cc11fde87 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2006.hdf5 
+  6b9cae379320f4899954c65fd5c7f3be /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2007.hdf5 
+  aa766f9085d083a14233190cf8734828 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2008.hdf5 
+  7dcd9ad0ddf2c810776f4cf3579d431b /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2009.hdf5 
+  884d59637cc7660e688ab121ec86c85b /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2010.hdf5 
+  0c6d00301fa2ed5873265ef13fb032f1 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2011.hdf5 
+  ef7150d828b00cef91c8aa6fea32717f /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2012.hdf5 
+  b9100ee9d14f4426b13292adfcfe3b18 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2013.hdf5 
+  86d8a2217a54136e7a1150cb403f02af /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2014.hdf5 
+  91b61f35b060bbdf08ccd2603683c4a0 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2015.hdf5 
+  b80ef935432a7a0b7aee6a9dd147d227 /p/projects/rd3mod/inputdata/sources/GFED/GFED4.1s_2016.hdf5 
+  125f00dc370abd5787d5f12c759add78 /p/projects/magpie/users/crawford/fire-emissions/clustermap_rev4.118_c200_67420_h12.rds -> /p/projects/piam/scenariomip-runs-intermediate-versions-v4-v7p4/main_v6p6/remind/magpie/output/C_SMIPv06-M-SSP2-NPi2025-def-mag-4/clustermap_rev4.118_c200_67420_h12.rds
+  2c691840726dd3aea25cd40674513a66 /p/projects/magpie/users/crawford/fire-emissions/C_SMIPv06-M-SSP2-NPi2025-def-mag-4_avl_land_full_t_0.5.mz -> /p/projects/piam/scenariomip-runs-intermediate-versions-v4-v7p4/main_v6p6/remind/magpie/output/C_SMIPv06-M-SSP2-NPi2025-def-mag-4/avl_land_full_t_0.5.mz
+  9dbd9cbed168c510cf705bad51f75939 /p/projects/magpie/users/crawford/fire-emissions/C_SMIPv06-M-SSP2-NPi2025-def-mag-4_f58_peatland_area_0.5.mz -> /p/projects/piam/scenariomip-runs-intermediate-versions-v4-v7p4/main_v6p6/remind/magpie/output/C_SMIPv06-M-SSP2-NPi2025-def-mag-4/f58_peatland_area_0.5.mz
+  25584ac8f9a78fa8b0e49663549eac9d /p/projects/rd3mod/inputdata/sources/GFWLossByDriver/loss_by_driver.csv 
+  642328774175536be54c0bad056f97e9 /p/projects/rd3mod/inputdata/sources/GFWLossByDriver/DOWNLOAD.yml 
+  2b76fdeb6fcfe4d73462afebb9ee88f3 /p/projects/rd3mod/R/libraries/piam_1.27/4.3.2/madrat/extdata/regionmappingH12.csv 

@@ -1,6 +1,11 @@
 #' @title reportFireEmissions.R
-#' @description reads land cover data and deforestation data to produce future estimates of fire emissions
-#' based on extrapolating GFED data from 2003-2016
+#' @description reads land cover data and deforestation data to produce future estimates of non-CO2 fire
+#' emissions based on extrapolating GFED4.1s data from 2003-2016. Emissions are area x rho x emission factor,
+#' where rho (inst/extdata/GFED_regional_dm_rho_scaled.csv) is the regional GFED dry-matter mass of a fire
+#' partition per hectare of the MAgPIE class it is applied to; see the provenance file beside it.
+#' CO2 is not reported, to avoid double counting: deforestation-fire CO2 is part of the carbon stock loss in
+#' MAgPIE's land-use change CO2, and the LPJmL carbon densities behind MAgPIE's stocks come from a run with
+#' fire enabled.
 #' @export
 #'
 #' @param gdx GDX file
@@ -15,17 +20,21 @@
 #'   }
 #'
 #' @section Fire emission variables:
+#' Reported for X = BC, CO, NO2, OC, SO2, N2O, CH4, NH3 and VOC (no CO2).
+#'
 #' Name | Unit | Meta
 #' ---|---|---
-#' Emissions\|CO2\|AFOLU\|Land\|Fires | Mt CO2/yr | Total CO2 emissions from fires
-#' Emissions\|CO2\|AFOLU\|Land\|Fires\|+\|Forest Burning | Mt CO2/yr | CO2 from forest fires
-#' Emissions\|CO2\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Boreal Forest | Mt CO2/yr | CO2 from boreal
+#' Emissions\|X\|AFOLU\|Land\|Fires | Mt X/yr | Total X emissions from fires
+#' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Forest Burning | Mt X/yr | X from forest fires
+#' Emissions\|X\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Boreal Forest | Mt X/yr | X from boreal
 #' forest fires
-#' Emissions\|CO2\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Tropical Forest | Mt CO2/yr | CO2 from tropical
+#' Emissions\|X\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Temperate Forest | Mt X/yr | X from temperate
+#' forest fires
+#' Emissions\|X\|AFOLU\|Land\|Fires\|Forest Burning\|+\|Tropical Forest | Mt X/yr | X from tropical
 #' deforestation fires
-#' Emissions\|CO2\|AFOLU\|Land\|Fires\|+\|Grassland Burning | Mt CO2/yr | CO2 from grassland/savanna
+#' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Grassland Burning | Mt X/yr | X from grassland/savanna
 #' fires
-#' Emissions\|CO2\|AFOLU\|Land\|Fires\|+\|Peat Burning | Mt CO2/yr | CO2 from peat fires
+#' Emissions\|X\|AFOLU\|Land\|Fires\|+\|Peat Burning | Mt X/yr | X from peat fires
 #' @md
 
 
@@ -49,7 +58,8 @@ reportFireEmissions <- function(gdx, level = "reg") {
     dplyr::as_tibble() %>%
     stats::setNames(c("SPECIE", "SAVA", "BORF", "TEMF", "DEFO", "PEAT", "AGRI"))
 
-  emissionFactorsSingleton <- c("BC", "CO", "CO2",  "NOx", "OC", "SO2", "N2O", "CH4", "NH3")
+  # No CO2: it would double count MAgPIE's land-use change CO2 (see description)
+  emissionFactorsSingleton <- c("BC", "CO", "NOx", "OC", "SO2", "N2O", "CH4", "NH3")
   emissionFactorsVOC    <- c(
     "NMHC",
     "C2H6", "CH3OH", "C2H5OH", "C3H8",
@@ -124,7 +134,7 @@ reportFireEmissions <- function(gdx, level = "reg") {
   im_years <- collapseDim(m_yeardiff(gdx), dim = c(1, 3))
   area_defo <- area_defo / im_years
 
-  # Deforestation in tropical biomes (for DEFO_largeFires)
+  # Regional deforestation, summed over clusters (for DEFO_largeFires)
   area_defo <- dimSums(area_defo, dim = c(1.2, 3)) %>%
     dplyr::as_tibble() %>%
     dplyr::rename(reg = "j") %>%

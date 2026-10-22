@@ -1,0 +1,29 @@
+GFED_regional_dm_rho_scaled.csv - provenance
+created: 2026-10-22 08:42 CEST
+generator: github.com/mscrawford/Fire-Emissions, rho/run_rho.R at 0ad678dd9c4f0081ec65a753e6b99dd17f41ea4d 
+units: kg DM per m2 of class area per year; DEFO_largeFires per m2 deforested per year
+definition: rho(p, r) = mean annual GFED4.1s DM mass of partition p in H12 region r
+            / mean area of the MAgPIE class p is applied to (reference run, same years)
+classes: SAVA = past + other; BORF, TEMF, PEAT, DEFO_smallFires = primforest + secdforest + forestry;
+         AGRI = crop; DEFO_largeFires = primforest + secdforest reduction + secdforest disturbance loss
+period: 2003-2016
+DEFO_largeFires: 0 below 0.01 Mha/yr deforestation; capped at 20.3 kg DM/m2 (capped: OAS )
+R: R version 4.5.0 (2025-04-11)
+inputs (md5):
+  113c7f7894e293e2c2e45210f1a81567 GFED/GFED4.1s_2003.hdf5
+  9018f9d8dc01865e72865ed3c5389581 GFED/GFED4.1s_2004.hdf5
+  4209f38d1e31647e9b4ee4157662589b GFED/GFED4.1s_2005.hdf5
+  4cfe1e7670c5fe98fed1554cc11fde87 GFED/GFED4.1s_2006.hdf5
+  6b9cae379320f4899954c65fd5c7f3be GFED/GFED4.1s_2007.hdf5
+  aa766f9085d083a14233190cf8734828 GFED/GFED4.1s_2008.hdf5
+  7dcd9ad0ddf2c810776f4cf3579d431b GFED/GFED4.1s_2009.hdf5
+  884d59637cc7660e688ab121ec86c85b GFED/GFED4.1s_2010.hdf5
+  0c6d00301fa2ed5873265ef13fb032f1 GFED/GFED4.1s_2011.hdf5
+  ef7150d828b00cef91c8aa6fea32717f GFED/GFED4.1s_2012.hdf5
+  b9100ee9d14f4426b13292adfcfe3b18 GFED/GFED4.1s_2013.hdf5
+  86d8a2217a54136e7a1150cb403f02af GFED/GFED4.1s_2014.hdf5
+  91b61f35b060bbdf08ccd2603683c4a0 GFED/GFED4.1s_2015.hdf5
+  b80ef935432a7a0b7aee6a9dd147d227 GFED/GFED4.1s_2016.hdf5
+  125f00dc370abd5787d5f12c759add78 clustermap_rev4.118_c200_67420_h12.rds
+  16776850460df7f93828e705b409c2bd C_SMIPv06-M-SSP2-NPi2025-def-mag-4_cell.land_0.5.mz
+  b417e95d080542f0bd7c1ee4d7e91055 C_SMIPv06-M-SSP2-NPi2025-def-mag-4_fulldata.gdx

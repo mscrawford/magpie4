@@ -46,7 +46,7 @@ reportCropResidues2ndBE <- function(gdx, file = NULL, collectionFraction = 0.25,
   # Calculate recycling shares and downscale to ISO
   recycleShare <- collapseNames(usage[, , "recycling"], collapsedim = 1) / dimSums(usage, dim = "usage")
   recycleShare <- toolAggregate(recycleShare, rel = i2iso, from = "i", to = "iso")
-  recycled     <- collapseNames(biomass * mstools::toolIso2CellCountries(recycleShare, cells = "lpjcell"))
+  recycled     <- collapseNames(biomass * mstools::toolIso2CellCountries(recycleShare))
 
   # Get crop area
   area    <- croparea(gdx, level = "grid", products = "kcr", product_aggr = FALSE)

@@ -13,7 +13,11 @@
 #' @param cropTypes FALSE for aggregate results; TRUE for crop-specific results
 #' @param threshold passed to mstools::toolFertilizerDistribution
 #' @param progress passed to mstools::toolFertilizerDistribution
-#' @author Benjamin Leon Bodirsky, Michael Crawford, Edna J. Molina Bacca, Florian Humpenoeder
+#' @param disaggLvst grid-level disaggregation of the manure applied to cropland (confinement
+#' manure recycled to cropland and stubble grazing), passed to \code{\link{ManureExcretion}}:
+#' "landbased" (default: by cropland area within each cluster) or "glw" (gridded livestock
+#' distribution times cropland share).
+#' @author Benjamin Leon Bodirsky, Michael Crawford, Edna J. Molina Bacca, Florian Humpenoeder, Bin Lin
 #' @importFrom magpiesets findset
 #' @importFrom madrat toolAggregate
 #' @importFrom magclass dimSums collapseNames mbind
@@ -25,7 +29,7 @@
 #'
 NitrogenBudget <- memoise(function(gdx, include_emissions = FALSE,
                                    level = "reg", debug = FALSE, cropTypes = FALSE,
-                                   threshold = 0.05, progress = TRUE) {
+                                   threshold = 0.05, progress = TRUE, disaggLvst = "landbased") {
 
   if (level %in% c("cell", "reg", "grid", "iso")) {
     kcr <- findset("kcr")
@@ -76,16 +80,31 @@ NitrogenBudget <- memoise(function(gdx, include_emissions = FALSE,
     manureConfinement <- readGDX(gdx, "ov_manure_confinement", select = list(type = "level"))[, , "nr"]
     recyclingShare <- readGDX(gdx, "i55_manure_recycling_share")[, , "nr"]
     manureRecycling <- dimSums(manureConfinement * recyclingShare, dim = c(3.2, 3.3))
-    manureRecycling <- dimSums(manureRecycling, dim = 3)
-    manure <- gdxAggregate(gdx = gdx, weight = "land", x = manureRecycling,
-                           to = level, absolute = TRUE, types = "crop")
+    if (disaggLvst == "glw") {
+      manureRecycling <- gdxAggregate(gdx = gdx, weight = "ManureExcretion", x = manureRecycling,
+                                      to = level, absolute = TRUE, products = readGDX(gdx, "kli"),
+                                      awms = "confinement", agg = "awms",
+                                      disaggLvst = disaggLvst, recycled = TRUE)
+      manure <- dimSums(manureRecycling, dim = 3)
+    } else {
+      manureRecycling <- dimSums(manureRecycling, dim = 3)
+      manure <- gdxAggregate(gdx = gdx, weight = "land", x = manureRecycling,
+                             to = level, absolute = TRUE, types = "crop")
+    }
 
     croplandgrazing <- dimSums(readGDX(gdx, "ov_manure",
                                        select = list(type = "level"))[, , "stubble_grazing"][, , "nr"],
                                dim = c(3.2, 3.3))
-    croplandgrazing <- dimSums(croplandgrazing, dim = 3)
-    croplandgrazing <- gdxAggregate(gdx = gdx, weight = "land", x = croplandgrazing,
-                                    to = level, absolute = TRUE, types = "crop")
+    if (disaggLvst == "glw") {
+      croplandgrazing <- gdxAggregate(gdx = gdx, weight = "ManureExcretion", x = croplandgrazing,
+                                      to = level, absolute = TRUE, products = readGDX(gdx, "kli"),
+                                      awms = "stubble_grazing", agg = "awms", disaggLvst = disaggLvst)
+      croplandgrazing <- dimSums(croplandgrazing, dim = 3)
+    } else {
+      croplandgrazing <- dimSums(croplandgrazing, dim = 3)
+      croplandgrazing <- gdxAggregate(gdx = gdx, weight = "land", x = croplandgrazing,
+                                      to = level, absolute = TRUE, types = "crop")
+    }
 
     dep <- readGDX(gdx, "ov50_nr_deposition")[, , "crop"][, , "level"]
     dep <- gdxAggregate(gdx = gdx, weight = "land", x = dep, to = level, absolute = TRUE, types = "crop")

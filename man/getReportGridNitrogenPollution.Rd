@@ -4,7 +4,12 @@
 \alias{getReportGridNitrogenPollution}
 \title{getReportGridNitrogenPollution}
 \usage{
-getReportGridNitrogenPollution(gdx, reportOutputDir = NULL, scenario = NULL)
+getReportGridNitrogenPollution(
+  gdx,
+  reportOutputDir = NULL,
+  scenario = NULL,
+  confinementWeighting = "cropland"
+)
 }
 \arguments{
 \item{gdx}{gdx file}
@@ -14,6 +19,10 @@ disk, and only returned to the calling function.}
 
 \item{scenario}{the name of the scenario used. If NULL the report is not saved to disk, and only returned to the
 calling function.}
+
+\item{confinementWeighting}{passed through to \code{reportGridManureExcretion}: spatial weighting for
+disaggregating confinement manure losses to grid cells, "cropland" (default) or "livestock". See that
+function's documentation for details.}
 }
 \value{
 A list of MAgPIE objects containing the reports

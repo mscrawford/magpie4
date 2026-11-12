@@ -48,6 +48,19 @@
 #'          Input to a process without outputs (free disposal) and substitute input of a pool without
 #'          relabelled tonnes are not attributed to any secondary.
 #'
+#'          Guards (each with a warning naming region, year and secondary; the identity above then no longer holds
+#'          for that region and year):
+#'          \itemize{
+#'            \item processing or substitute input into a secondary the region does not produce
+#'                  (ov_prod_reg <= 0) is not attributed;
+#'            \item where a secondary is almost entirely made from itself (oils used as substitutes for oils,
+#'                  oilcakes for oilcakes: production minus that input below 0.1 percent of production), the
+#'                  content per tonne is ill-determined, and the region gets the World factor for it;
+#'            \item NA levels are read as 0.
+#'          }
+#'          The pool structure is that of module 20 realization substitution_may21; for a gdx without its symbols
+#'          (ov20_secondary_substitutes, oilcake_substitutes20, kcereals20, no_milling_ginning20) the function stops.
+#'
 #' @return MAgPIE object containing the amount of primary product needed per unit of secondary product (tDM/tDM)
 #'
 #' @author Kristine Karstens, David M Chen
@@ -217,17 +230,30 @@ primaryPerSecondary <- function(gdx,
 # Primary content per tonne of each region's secondary production, built from the model levels
 # (composition = "levels"; see the details of primaryPerSecondary). allocWeights: (t, processing20.ksd.kpr).
 .primaryPerSecondaryLevels <- function(gdx, allocWeights, simYears, ksd, realPrim) {
-  lev <- function(name) unwrap(collapseNames(readGDX(gdx, name, select = list(type = "level"))[, simYears, ]))
+  needed  <- c("ov20_secondary_substitutes", "oilcake_substitutes20", "kcereals20", "no_milling_ginning20")
+  missing <- needed[vapply(needed, function(s) is.null(readGDX(gdx, s, react = "silent")), logical(1))]
+  if (length(missing) > 0) {
+    stop("composition = 'levels' needs module 20 realization substitution_may21 (not in gdx: ",
+         paste(missing, collapse = ", "), ")")
+  }
+  if (dim(allocWeights)[1] != 1) {
+    stop("composition = 'levels' expects global processing conversion factors")
+  }
+  lev <- function(name) {
+    x <- unwrap(collapseNames(readGDX(gdx, name, select = list(type = "level"))[, simYears, ]))
+    if (anyNA(x)) {
+      warning("primaryPerSecondary: ", sum(is.na(x)), " NA level(s) of ", name, " read as 0")
+      x[is.na(x)] <- 0
+    }
+    return(x)
+  }
   dem   <- lev("ov20_dem_processing")                    # i, t, processing_subst20, kpr
   subst <- lev("ov20_secondary_substitutes")             # i, t, ksd, kpr
   prod  <- lev("ov_prod_reg")[, , ksd, drop = FALSE]     # i, t, ksd
   nrAtt <- collapseNames(readGDX(gdx, "fm_attributes")[, , "nr"])
   nr    <- as.vector(nrAtt)
   names(nr) <- getItems(nrAtt, dim = 3)
-  if (dim(allocWeights)[1] != 1) {
-    stop("composition = 'levels' expects global processing conversion factors")
-  }
-  weights   <- unwrap(allocWeights)[1, , , , , drop = TRUE]   # t, processing20, ksd, kpr
+  weights   <- unwrap(allocWeights)                            # 1, t, processing20, ksd, kpr
   processes <- intersect(readGDX(gdx, "processing20"), readGDX(gdx, "no_milling_ginning20"))
   kprIn     <- dimnames(dem)[[4]]
   regions   <- dimnames(dem)[[1]]
@@ -258,11 +284,21 @@ primaryPerSecondary <- function(gdx,
   }
 
   # content per tonne of production: p_j z_j = e_jk + sum_m e_jm z_m, where p > 0; elsewhere the fallback
-  solveContent <- function(e, p, fallback) {
+  solveContent <- function(e, p, fallback, where) {
     es  <- matrix(0, length(ksd), length(ksd), dimnames = list(ksd, ksd))
     sec <- intersect(kprIn, ksd)
     es[, sec] <- e[, sec]
-    pos <- p > 0
+    lost <- p <= 0 & rowSums(e) > 1e-8
+    if (any(lost)) {
+      warning("primaryPerSecondary: ", where, ": input into ", paste(ksd[lost], collapse = ", "),
+              " without production; its primary content is not attributed")
+    }
+    weak <- p > 0 & p - diag(es) <= 1e-3 * p
+    if (any(weak)) {
+      warning("primaryPerSecondary: ", where, ": ", paste(ksd[weak], collapse = ", "),
+              " almost entirely made from itself; World factor used")
+    }
+    pos <- p > 0 & !weak
     z   <- fallback
     if (any(pos)) {
       rhs <- e[pos, realPrim, drop = FALSE] + es[pos, !pos, drop = FALSE] %*% fallback[!pos, , drop = FALSE]
@@ -275,11 +311,12 @@ primaryPerSecondary <- function(gdx,
                   sets = c("i", "t_all", "ksd", "kpr"))
   zero <- matrix(0, length(ksd), length(realPrim), dimnames = list(ksd, realPrim))
   for (t in simYears) {
-    w <- weights[t, , , ]
-    world <- solveContent(edges(apply(dem[, t, , ], c(2, 3), sum), apply(subst[, t, , ], c(2, 3), sum), w),
-                          colSums(prod[, t, , drop = FALSE][, 1, ]), zero)
+    w <- weights[1, t, , , ]
+    world <- solveContent(edges(apply(dem[, t, , , drop = FALSE], c(3, 4), sum),
+                                apply(subst[, t, , , drop = FALSE], c(3, 4), sum), w),
+                          apply(prod[, t, , drop = FALSE], 3, sum), zero, paste("World", t))
     for (r in regions) {
-      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w), prod[r, t, ], world)
+      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w), prod[r, t, ], world, paste(r, t))
       x[r, t, ] <- as.vector(z)
     }
   }

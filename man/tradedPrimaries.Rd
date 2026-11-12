@@ -12,7 +12,8 @@ tradedPrimaries(
   kastner = TRUE,
   level = "reg",
   disaggLivestock = FALSE,
-  selfselfTrade = TRUE
+  selfselfTrade = TRUE,
+  composition = "shares"
 )
 }
 \arguments{
@@ -42,6 +43,10 @@ unchanged (\code{pathway.kve_product}). Default is FALSE.}
 
 \item{selfselfTrade}{if TRUE makes the self.self trade diagonal the amount from trade matrix,
 as opposed to the domestic consumption diagonal of Kastner matrix}
+
+\item{composition}{Passed to \code{\link{primaryPerSecondary}}: "shares" (default) builds the primary
+content of secondary products from the input processing shares, "levels" from the model solution, so that
+secondary trade and secondary feed carry the primaries actually processed into them (see its details).}
 }
 \value{
 MAgPIE object with primary product trade equivalents in dry matter (tDM).

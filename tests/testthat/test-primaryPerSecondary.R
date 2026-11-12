@@ -162,12 +162,15 @@ test_that("primaryPerSecondary with composition = 'levels' warns at its guards",
   r1 <- getItems(subOils, dim = 1)[which.max(subOils)]                        # most oils used as substitutes
   r2 <- setdiff(getItems(prod, dim = 1), r1)[1]
   rDG <- getItems(prod, dim = 1)[which.max(prod[, t, "distillers_grain"])]
+  subCereals <- dimSums(dem[, t, paste0("substitutes.", readGDX(gdx, "kcereals20"))], dim = 3)
+  rBrans <- getItems(prod, dim = 1)[which.max(subCereals)]
 
   expect_length(levelsWith()$warnings, 0)
 
-  # oils production 0.1 percent above the oils used as substitutes: World factor, as for a region without oils
+  # oils production 0.5 percent above the oils used as substitutes (threshold 1 percent): World factor, as for a
+  # region without oils
   weak <- levelsWith("ov_prod_reg", function(x) {
-    x[r1, t, "oils"] <- 1.001 * as.numeric(subOils[r1, , ])
+    x[r1, t, "oils"] <- 1.005 * as.numeric(subOils[r1, , ])
     x[r2, t, "oils"] <- 0
     return(x)
   })
@@ -190,4 +193,20 @@ test_that("primaryPerSecondary with composition = 'levels' warns at its guards",
   })
   expect_true(any(grepl(paste("NA level(s) of ov20_dem_processing read as 0 in", r1, t), na$warnings, fixed = TRUE)))
   expect_false(anyNA(na$x))
+
+  # cereals used as substitutes but no relabelled brans: warning
+  pool <- levelsWith("ov20_secondary_substitutes", function(x) {
+    x[rBrans, t, paste0("brans.", readGDX(gdx, "kcereals20"))] <- 0
+    return(x)
+  })
+  expect_true(any(grepl(paste0(rBrans, " ", t, ": substitute input to the brans pool without relabelled tonnes"),
+                        pool$warnings, fixed = TRUE)))
+
+  # the World itself almost entirely made from its own oils: content not attributed, factor 0
+  worldWeak <- levelsWith("ov_prod_reg", function(x) {
+    x[, t, "oils"] <- 1.005 * as.numeric(subOils)
+    return(x)
+  })
+  expect_true(any(grepl(paste0("World ", t, ": oils almost entirely made from itself; content not attributed"),
+                        worldWeak$warnings, fixed = TRUE)))
 })

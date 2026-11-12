@@ -63,9 +63,10 @@ With \code{composition = "levels"} the primary content of a region's production 
            \item the divisor is the whole production ov_prod_reg(j), so tonnes from the processing balance
                  flow dilute the content and the content of overproduced (wasted) tonnes stays with the
                  produced ones;
-           \item milling and ginning outputs (brans, fibres, maize and rice oils and cakes from milling) carry
-                 no primary content: their input is food use (milling) or the whole production (ginning) of the
-                 crop, which is not processing use (vm_dem_processing) and stays with the crop's own uses;
+           \item milling and ginning pass no primary content to their outputs (brans, fibres, maize and rice oils
+                 and cakes from milling): their input is food use (milling) or the whole production (ginning) of
+                 the crop, which is not processing use (vm_dem_processing) and stays with the crop's own uses.
+                 Brans still carry cereal content through the brans substitution pool; fibres carry none;
            \item a region that does not produce j gets the factor of the world as a single region.
          }
          Input to a process without outputs (free disposal) and substitute input of a pool without
@@ -75,6 +76,7 @@ With \code{composition = "levels"} the primary content of a region's production 
          \itemize{
            \item processing or substitute input into a secondary the region does not produce
                  (ov_prod_reg <= 0) is not attributed (the identity above then misses that content);
+           \item substitute input to a pool without relabelled tonnes is not attributed (likewise);
            \item where a secondary is almost entirely made from itself (oils used as substitutes for oils,
                  oilcakes for oilcakes: production minus that input below 1 percent of production), its content
                  per tonne would be the content of the real output amplified more than 100 times; the region

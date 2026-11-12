@@ -40,9 +40,10 @@
 #'            \item the divisor is the whole production ov_prod_reg(j), so tonnes from the processing balance
 #'                  flow dilute the content and the content of overproduced (wasted) tonnes stays with the
 #'                  produced ones;
-#'            \item milling and ginning outputs (brans, fibres, maize and rice oils and cakes from milling) carry
-#'                  no primary content: their input is food use (milling) or the whole production (ginning) of the
-#'                  crop, which is not processing use (vm_dem_processing) and stays with the crop's own uses;
+#'            \item milling and ginning pass no primary content to their outputs (brans, fibres, maize and rice oils
+#'                  and cakes from milling): their input is food use (milling) or the whole production (ginning) of
+#'                  the crop, which is not processing use (vm_dem_processing) and stays with the crop's own uses.
+#'                  Brans still carry cereal content through the brans substitution pool; fibres carry none;
 #'            \item a region that does not produce j gets the factor of the world as a single region.
 #'          }
 #'          Input to a process without outputs (free disposal) and substitute input of a pool without
@@ -52,6 +53,7 @@
 #'          \itemize{
 #'            \item processing or substitute input into a secondary the region does not produce
 #'                  (ov_prod_reg <= 0) is not attributed (the identity above then misses that content);
+#'            \item substitute input to a pool without relabelled tonnes is not attributed (likewise);
 #'            \item where a secondary is almost entirely made from itself (oils used as substitutes for oils,
 #'                  oilcakes for oilcakes: production minus that input below 1 percent of production), its content
 #'                  per tonne would be the content of the real output amplified more than 100 times; the region
@@ -269,24 +271,27 @@ primaryPerSecondary <- function(gdx,
 
   # substitution pools of q20_processing_substitution_*; the protein pool splits between its outputs in N of the
   # nominal origin (the unit of its equation), the other pools have one output
-  pools <- list(list(input = "oils", output = "oils", nWeighted = FALSE),
-                list(input = "sugar", output = "molasses", nWeighted = FALSE),
-                list(input = oilcakeSubst, output = c("distillers_grain", "oilcakes"),
-                     nWeighted = TRUE),
-                list(input = cereals, output = "brans", nWeighted = FALSE))
+  pools <- list(oils = list(input = "oils", output = "oils", nWeighted = FALSE),
+                molasses = list(input = "sugar", output = "molasses", nWeighted = FALSE),
+                protein = list(input = oilcakeSubst, output = c("distillers_grain", "oilcakes"), nWeighted = TRUE),
+                brans = list(input = cereals, output = "brans", nWeighted = FALSE))
 
   # tonnes of each input (column) whose content goes into the production of each secondary (row)
-  edges <- function(d, s, w) {
+  edges <- function(d, s, w, where) {
     e <- matrix(0, length(ksd), length(kprIn), dimnames = list(ksd, kprIn))
     for (p in processes) {
       e <- e + sweep(w[p, ksd, kprIn], 2, d[p, kprIn], "*")
     }
-    for (pool in pools) {
+    for (name in names(pools)) {
+      pool   <- pools[[name]]
       unit   <- if (pool$nWeighted) nr[colnames(s)] else rep(1, ncol(s))
       weight <- as.vector(s[pool$output, , drop = FALSE] %*% unit)
       if (sum(weight) > 0) {
         e[pool$output, pool$input] <- e[pool$output, pool$input] +
           outer(weight / sum(weight), d["substitutes", pool$input])
+      } else if (sum(d["substitutes", pool$input]) > 1e-8) {
+        warning("primaryPerSecondary: ", where, ": substitute input to the ", name,
+                " pool without relabelled tonnes; its primary content is not attributed")
       }
     }
     return(e)
@@ -325,11 +330,11 @@ primaryPerSecondary <- function(gdx,
   for (t in simYears) {
     w <- weights[1, t, , , ]
     world <- solveContent(edges(apply(dem[, t, , , drop = FALSE], c(3, 4), sum),
-                                apply(subst[, t, , , drop = FALSE], c(3, 4), sum), w),
+                                apply(subst[, t, , , drop = FALSE], c(3, 4), sum), w, paste("World", t)),
                           apply(prod[, t, , drop = FALSE], 3, sum), zero, paste("World", t),
                           "content not attributed (factor 0)")
     for (r in regions) {
-      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w), prod[r, t, ], world, paste(r, t),
+      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w, paste(r, t)), prod[r, t, ], world, paste(r, t),
                         "World factor used")
       x[r, t, ] <- as.vector(z)
     }

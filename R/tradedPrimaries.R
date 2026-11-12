@@ -25,6 +25,9 @@
 #'   Output dim 3 will be \code{kli_product.kve_product} for the feed pathway instead of
 #'   the aggregated \code{feed.kve_product}. The \code{prim} and \code{secd} pathways are
 #'   unchanged (\code{pathway.kve_product}). Default is FALSE.
+#' @param composition Passed to \code{\link{primaryPerSecondary}}: "shares" (default) builds the primary
+#'   content of secondary products from the input processing shares, "levels" from the model solution, so that
+#'   secondary trade and secondary feed carry the primaries actually processed into them (see its details).
 #'
 #' @details When convFactor="exporter", the exporting region's processing pathways and 
 #'          feed baskets are used, which is appropriate for production-based footprint accounting.
@@ -69,7 +72,8 @@ tradedPrimaries <- function(gdx,
                             kastner = TRUE,
                             level = "reg",
                             disaggLivestock = FALSE,
-                            selfselfTrade = TRUE) {
+                            selfselfTrade = TRUE,
+                            composition = "shares") {
   
   # Validate inputs
   if (!convFactor %in% c("exporter", "importer")) {
@@ -159,7 +163,7 @@ tradedPrimaries <- function(gdx,
   simYears <- getYears(tradeFlows)
   
   # Get primary per secondary conversion factors
-  primPerSecd <- primaryPerSecondary(gdx, level = level, allocation = "value")
+  primPerSecd <- primaryPerSecondary(gdx, level = level, allocation = "value", composition = composition)
   primPerSecd <- primPerSecd[, simYears, ]
   
   # Get feed baskets (tDM feed per tDM livestock product)

@@ -48,16 +48,19 @@
 #'          Input to a process without outputs (free disposal) and substitute input of a pool without
 #'          relabelled tonnes are not attributed to any secondary.
 #'
-#'          Guards (each with a warning naming region, year and secondary; the identity above then no longer holds
-#'          for that region and year):
+#'          Guards, each with a warning that names region and year:
 #'          \itemize{
 #'            \item processing or substitute input into a secondary the region does not produce
-#'                  (ov_prod_reg <= 0) is not attributed;
+#'                  (ov_prod_reg <= 0) is not attributed (the identity above then misses that content);
 #'            \item where a secondary is almost entirely made from itself (oils used as substitutes for oils,
-#'                  oilcakes for oilcakes: production minus that input below 0.1 percent of production), the
-#'                  content per tonne is ill-determined, and the region gets the World factor for it;
+#'                  oilcakes for oilcakes: production minus that input below 1 percent of production), its content
+#'                  per tonne would be the content of the real output amplified more than 100 times; the region
+#'                  then gets the World factor for that secondary (the identity then no longer holds for that
+#'                  region and year). Where the World itself is in that state, the content is not attributed and
+#'                  the factor is 0;
 #'            \item NA levels are read as 0.
 #'          }
+#'          The solve stops if a factor comes out negative or not finite, which the pool structure below rules out.
 #'          The pool structure is that of module 20 realization substitution_may21; for a gdx without its symbols
 #'          (ov20_secondary_substitutes, oilcake_substitutes20, kcereals20, no_milling_ginning20) the function stops.
 #'
@@ -230,31 +233,37 @@ primaryPerSecondary <- function(gdx,
 # Primary content per tonne of each region's secondary production, built from the model levels
 # (composition = "levels"; see the details of primaryPerSecondary). allocWeights: (t, processing20.ksd.kpr).
 .primaryPerSecondaryLevels <- function(gdx, allocWeights, simYears, ksd, realPrim) {
-  needed  <- c("ov20_secondary_substitutes", "oilcake_substitutes20", "kcereals20", "no_milling_ginning20")
-  missing <- needed[vapply(needed, function(s) is.null(readGDX(gdx, s, react = "silent")), logical(1))]
-  if (length(missing) > 0) {
+  oilcakeSubst <- readGDX(gdx, "oilcake_substitutes20", react = "silent")
+  cereals      <- readGDX(gdx, "kcereals20", react = "silent")
+  noMillGin    <- readGDX(gdx, "no_milling_ginning20", react = "silent")
+  substLevel   <- readGDX(gdx, "ov20_secondary_substitutes", react = "silent", select = list(type = "level"))
+  absent <- c("ov20_secondary_substitutes", "oilcake_substitutes20", "kcereals20",
+              "no_milling_ginning20")[c(is.null(substLevel), is.null(oilcakeSubst), is.null(cereals), is.null(noMillGin))]
+  if (length(absent) > 0) {
     stop("composition = 'levels' needs module 20 realization substitution_may21 (not in gdx: ",
-         paste(missing, collapse = ", "), ")")
+         paste(absent, collapse = ", "), ")")
   }
   if (dim(allocWeights)[1] != 1) {
     stop("composition = 'levels' expects global processing conversion factors")
   }
-  lev <- function(name) {
-    x <- unwrap(collapseNames(readGDX(gdx, name, select = list(type = "level"))[, simYears, ]))
+  lev <- function(name, raw = readGDX(gdx, name, select = list(type = "level"))) {
+    x <- unwrap(collapseNames(raw[, simYears, ]))
     if (anyNA(x)) {
-      warning("primaryPerSecondary: ", sum(is.na(x)), " NA level(s) of ", name, " read as 0")
+      at <- which(is.na(x), arr.ind = TRUE)
+      warning("primaryPerSecondary: NA level(s) of ", name, " read as 0 in ",
+              paste(unique(paste(dimnames(x)[[1]][at[, 1]], dimnames(x)[[2]][at[, 2]])), collapse = ", "))
       x[is.na(x)] <- 0
     }
     return(x)
   }
   dem   <- lev("ov20_dem_processing")                    # i, t, processing_subst20, kpr
-  subst <- lev("ov20_secondary_substitutes")             # i, t, ksd, kpr
+  subst <- lev("ov20_secondary_substitutes", substLevel) # i, t, ksd, kpr
   prod  <- lev("ov_prod_reg")[, , ksd, drop = FALSE]     # i, t, ksd
   nrAtt <- collapseNames(readGDX(gdx, "fm_attributes")[, , "nr"])
   nr    <- as.vector(nrAtt)
   names(nr) <- getItems(nrAtt, dim = 3)
   weights   <- unwrap(allocWeights)                            # 1, t, processing20, ksd, kpr
-  processes <- intersect(readGDX(gdx, "processing20"), readGDX(gdx, "no_milling_ginning20"))
+  processes <- intersect(readGDX(gdx, "processing20"), noMillGin)
   kprIn     <- dimnames(dem)[[4]]
   regions   <- dimnames(dem)[[1]]
 
@@ -262,9 +271,9 @@ primaryPerSecondary <- function(gdx,
   # nominal origin (the unit of its equation), the other pools have one output
   pools <- list(list(input = "oils", output = "oils", nWeighted = FALSE),
                 list(input = "sugar", output = "molasses", nWeighted = FALSE),
-                list(input = readGDX(gdx, "oilcake_substitutes20"), output = c("distillers_grain", "oilcakes"),
+                list(input = oilcakeSubst, output = c("distillers_grain", "oilcakes"),
                      nWeighted = TRUE),
-                list(input = readGDX(gdx, "kcereals20"), output = "brans", nWeighted = FALSE))
+                list(input = cereals, output = "brans", nWeighted = FALSE))
 
   # tonnes of each input (column) whose content goes into the production of each secondary (row)
   edges <- function(d, s, w) {
@@ -284,7 +293,7 @@ primaryPerSecondary <- function(gdx,
   }
 
   # content per tonne of production: p_j z_j = e_jk + sum_m e_jm z_m, where p > 0; elsewhere the fallback
-  solveContent <- function(e, p, fallback, where) {
+  solveContent <- function(e, p, fallback, where, fallbackNote) {
     es  <- matrix(0, length(ksd), length(ksd), dimnames = list(ksd, ksd))
     sec <- intersect(kprIn, ksd)
     es[, sec] <- e[, sec]
@@ -293,16 +302,19 @@ primaryPerSecondary <- function(gdx,
       warning("primaryPerSecondary: ", where, ": input into ", paste(ksd[lost], collapse = ", "),
               " without production; its primary content is not attributed")
     }
-    weak <- p > 0 & p - diag(es) <= 1e-3 * p
+    weak <- p > 0 & p - diag(es) <= 0.01 * p
     if (any(weak)) {
       warning("primaryPerSecondary: ", where, ": ", paste(ksd[weak], collapse = ", "),
-              " almost entirely made from itself; World factor used")
+              " almost entirely made from itself; ", fallbackNote)
     }
     pos <- p > 0 & !weak
     z   <- fallback
     if (any(pos)) {
       rhs <- e[pos, realPrim, drop = FALSE] + es[pos, !pos, drop = FALSE] %*% fallback[!pos, , drop = FALSE]
       z[pos, ] <- solve(diag(p[pos], sum(pos)) - es[pos, pos, drop = FALSE], rhs)
+    }
+    if (!all(is.finite(z)) || min(z) < -1e-9) {
+      stop("primaryPerSecondary: ", where, ": negative or non-finite content per tonne")
     }
     return(z)
   }
@@ -314,9 +326,11 @@ primaryPerSecondary <- function(gdx,
     w <- weights[1, t, , , ]
     world <- solveContent(edges(apply(dem[, t, , , drop = FALSE], c(3, 4), sum),
                                 apply(subst[, t, , , drop = FALSE], c(3, 4), sum), w),
-                          apply(prod[, t, , drop = FALSE], 3, sum), zero, paste("World", t))
+                          apply(prod[, t, , drop = FALSE], 3, sum), zero, paste("World", t),
+                          "content not attributed (factor 0)")
     for (r in regions) {
-      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w), prod[r, t, ], world, paste(r, t))
+      z <- solveContent(edges(dem[r, t, , ], subst[r, t, , ], w), prod[r, t, ], world, paste(r, t),
+                        "World factor used")
       x[r, t, ] <- as.vector(z)
     }
   }

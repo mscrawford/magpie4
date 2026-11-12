@@ -71,16 +71,19 @@ With \code{composition = "levels"} the primary content of a region's production 
          Input to a process without outputs (free disposal) and substitute input of a pool without
          relabelled tonnes are not attributed to any secondary.
 
-         Guards (each with a warning naming region, year and secondary; the identity above then no longer holds
-         for that region and year):
+         Guards, each with a warning that names region and year:
          \itemize{
            \item processing or substitute input into a secondary the region does not produce
-                 (ov_prod_reg <= 0) is not attributed;
+                 (ov_prod_reg <= 0) is not attributed (the identity above then misses that content);
            \item where a secondary is almost entirely made from itself (oils used as substitutes for oils,
-                 oilcakes for oilcakes: production minus that input below 0.1 percent of production), the
-                 content per tonne is ill-determined, and the region gets the World factor for it;
+                 oilcakes for oilcakes: production minus that input below 1 percent of production), its content
+                 per tonne would be the content of the real output amplified more than 100 times; the region
+                 then gets the World factor for that secondary (the identity then no longer holds for that
+                 region and year). Where the World itself is in that state, the content is not attributed and
+                 the factor is 0;
            \item NA levels are read as 0.
          }
+         The solve stops if a factor comes out negative or not finite, which the pool structure below rules out.
          The pool structure is that of module 20 realization substitution_may21; for a gdx without its symbols
          (ov20_secondary_substitutes, oilcake_substitutes20, kcereals20, no_milling_ginning20) the function stops.
 }

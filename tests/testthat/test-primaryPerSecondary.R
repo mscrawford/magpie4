@@ -1,15 +1,21 @@
-ppsFingerprint <- function(gdx) {
-  paste("# fingerprint", sprintf("%.12g", sum(readGDX(gdx, "f20_processing_shares"))),
-        sprintf("%.12g", sum(readGDX(gdx, "f20_processing_conversion_factors"))))
-}
-
 test_that("primaryPerSecondary (composition = 'shares') reproduces stored reference values", {
   run_only_if_full_tests_requested()
   gdx <- fullDataGdxPath("magpie-default")
   skip_if_not(file.exists(gdx), "gdx file not available")
+  # oils from soybean by mass, from the inputs alone: share / (sum of outputs per tonne), summed over processes
+  x <- primaryPerSecondary(gdx, allocation = "mass")
+  years <- getYears(x)
+  conv <- unwrap(readGDX(gdx, "f20_processing_conversion_factors")[, years, ])[1, , , , "soybean"]
+  perTonne <- apply((conv[, , "oils"] > 0) / apply(conv, c(1, 2), sum), 1, sum, na.rm = TRUE)
+  share <- readGDX(gdx, "f20_processing_shares")[, years, "oils.soybean"]
+  expect_equal(as.vector(x[, , "oils.soybean"]), as.vector(share * rep(perTonne, each = nregions(x))),
+               tolerance = 1e-12)
+
+  # stored reference values (tests/testthat/fixtures/make_primaryPerSecondary_shares.R)
   refFile <- test_path("fixtures", "primaryPerSecondary_shares.csv")
   skip_if(readLines(refFile, n = 1) != ppsFingerprint(gdx),
-          "reference values were made for another magpie-default fixture; regenerate them with the shares path")
+          paste("reference values were made for another magpie-default fixture;",
+                "regenerate them with fixtures/make_primaryPerSecondary_shares.R"))
   ref <- utils::read.csv(refFile, comment.char = "#", stringsAsFactors = FALSE)
   for (allocation in unique(ref$allocation)) {
     x <- magclass::as.data.frame(primaryPerSecondary(gdx, allocation = allocation), rev = 2)
@@ -124,4 +130,64 @@ test_that("primaryPerSecondary with composition = 'levels' puts the content wher
       expect_equal(x[i, t, "ethanol", ], zEth[t, ], tolerance = 1e-9)
     }
   }
+})
+
+test_that("primaryPerSecondary with composition = 'levels' warns at its guards", {
+  run_only_if_full_tests_requested()
+  gdx <- fullDataGdxPath("magpie-default")
+  skip_if_not(file.exists(gdx), "gdx file not available")
+
+  realReadGDX <- gdx2::readGDX
+  # composition = "levels" with one gdx symbol changed; returns the factors and all warnings
+  levelsWith <- function(symbol = NULL, change = identity) {
+    local_mocked_bindings(readGDX = function(...) {
+      x <- realReadGDX(...)
+      args <- list(...)
+      if (length(args) > 1 && identical(args[[2]], symbol)) x <- change(x)
+      return(x)
+    })
+    warnings <- character(0)
+    x <- withCallingHandlers(primaryPerSecondary(gdx, allocation = "value", composition = "levels"),
+                             warning = function(w) {
+                               warnings <<- c(warnings, conditionMessage(w))
+                               invokeRestart("muffleWarning")
+                             })
+    return(list(x = x, warnings = warnings))
+  }
+  lev  <- function(name) collapseNames(realReadGDX(gdx, name, select = list(type = "level")))
+  dem  <- lev("ov20_dem_processing")
+  prod <- lev("ov_prod_reg")
+  t <- "y2050"
+  subOils <- dem[, t, "substitutes.oils"]
+  r1 <- getItems(subOils, dim = 1)[which.max(subOils)]                        # most oils used as substitutes
+  r2 <- setdiff(getItems(prod, dim = 1), r1)[1]
+  rDG <- getItems(prod, dim = 1)[which.max(prod[, t, "distillers_grain"])]
+
+  expect_length(levelsWith()$warnings, 0)
+
+  # oils production 0.1 percent above the oils used as substitutes: World factor, as for a region without oils
+  weak <- levelsWith("ov_prod_reg", function(x) {
+    x[r1, t, "oils"] <- 1.001 * as.numeric(subOils[r1, , ])
+    x[r2, t, "oils"] <- 0
+    return(x)
+  })
+  expect_true(any(grepl(paste0(r1, " ", t, ": oils almost entirely made from itself; World factor used"), weak$warnings,
+                        fixed = TRUE)))
+  expect_equal(as.vector(weak$x[r1, t, "oils"]), as.vector(weak$x[r2, t, "oils"]))
+
+  # distillers grain made without production: warning
+  lost <- levelsWith("ov_prod_reg", function(x) {
+    x[rDG, t, "distillers_grain"] <- 0
+    return(x)
+  })
+  expect_true(any(grepl(paste0(rDG, " ", t, ": input into distillers_grain without production"), lost$warnings,
+                        fixed = TRUE)))
+
+  # an NA level is read as 0 with a warning naming symbol, region and year
+  na <- levelsWith("ov20_dem_processing", function(x) {
+    x[r1, t, "extracting.soybean"] <- NA
+    return(x)
+  })
+  expect_true(any(grepl(paste("NA level(s) of ov20_dem_processing read as 0 in", r1, t), na$warnings, fixed = TRUE)))
+  expect_false(anyNA(na$x))
 })

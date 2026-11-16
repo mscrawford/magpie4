@@ -6,6 +6,9 @@
 #' @param gdx GDX file
 #' @param include_emissions TRUE also divides the N surplus into different emissions
 #' @param level aggregation level, reg, glo or regglo, cell, grid, iso
+#' @param withdrawals "supply" (default): pasture withdrawals are the grass used as feed (regional supply share of
+#' production, applied uniformly within a region); "production": all grass produced counts as withdrawn, as in GAMS
+#' v50_nr_surplus_pasture (the behaviour before 2026-11-16)
 #' @author Benjamin Leon Bodirsky, Edna J. Molina Bacca
 #' @importFrom magpiesets findset
 #' @importFrom magclass dimSums collapseNames mbind
@@ -15,9 +18,53 @@
 #' x <- NitrogenBudgetPasture(gdx)
 #' }
 #'
-NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg") {
+NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg", withdrawals = "supply") {
 
+  if (!withdrawals %in% c("supply", "production")) {
+    stop("withdrawals must be 'supply' (grass used as feed) or 'production' (all grass produced)")
+  }
   harvest    <- production(gdx, level = level, attributes = "nr", products = "pasture")
+  if (ndata(harvest) != 1) stop("NitrogenBudgetPasture: expected one data column for pasture harvest")
+  # Pasture production above the regional pasture supply (feed use, q16_supply_pasture) is grass grown but not
+  # eaten: it is not removed from the field, so it is not a withdrawal. With withdrawals = "supply" the harvest
+  # is production times the regional share used (supply / production), applied uniformly to the region's cells;
+  # with "production" all grass produced counts as withdrawn (the behaviour before 2026-11-16, equal to GAMS
+  # v50_nr_surplus_pasture). The share differs from 1 when the pasture N balance is slack and the solver picks a
+  # production level above feed demand (no cost on pasture production after calibration).
+  unfed <- NULL
+  if (withdrawals == "supply") {
+    prodReg <- collapseNames(readGDX(gdx, "ov_prod_reg", select = list(type = "level"))[, getYears(harvest), "pasture"])
+    supReg  <- collapseNames(readGDX(gdx, "ov_supply", select = list(type = "level"))[, getYears(harvest), "pasture"])
+    usedShr <- as.array(supReg / prodReg)[, , 1]
+    usedShr[!is.finite(usedShr)] <- 1
+    if (any(usedShr > 1 + 1e-6)) {
+      warning("Pasture supply exceeds pasture production in some region; used share capped at 1")
+    }
+    usedShr[usedShr > 1] <- 1
+    harvestProd <- harvest
+    if (level %in% c("reg", "glo", "regglo")) {
+      harvestReg  <- production(gdx, level = "reg", attributes = "nr", products = "pasture")
+      harvestReg[, , ] <- as.array(harvestReg)[, , 1] * usedShr[getItems(harvestReg, dim = 1), getYears(harvestReg), drop = FALSE]
+      harvest <- if (level == "reg") harvestReg else gdxAggregate(gdx = gdx, x = harvestReg, to = level, absolute = TRUE)
+    } else {
+      items <- getItems(harvest, dim = 1)
+      if (level == "cell") {
+        m <- readGDX(gdx, "cell")
+        reg <- as.character(m[[1]])[match(items, gsub("_", ".", as.character(m[[2]])))]
+      } else if (level == "grid") {
+        cm <- readRDS(Sys.glob(file.path(dirname(normalizePath(gdx)), "clustermap*.rds")))
+        reg <- as.character(cm[[3]])[match(items, as.character(cm[[1]]))]
+      } else if (level == "iso") {
+        m <- readGDX(gdx, "i_to_iso")
+        reg <- as.character(m[[1]])[match(items, as.character(m[[2]]))]
+      } else {
+        stop("withdrawals = 'supply' is not implemented for level ", level)
+      }
+      if (anyNA(reg)) stop("NitrogenBudgetPasture: could not map ", sum(is.na(reg)), " items of level ", level, " to regions")
+      harvest[, , ] <- as.array(harvest)[, , 1] * usedShr[reg, getYears(harvest), drop = FALSE]
+    }
+    unfed <- harvestProd - harvest
+  }
   fertilizer <- collapseNames(readGDX(gdx, "ov_nr_inorg_fert_reg", format = "first_found", select = list(type = "level"))[, , "past"])
 
   manure     <- dimSums(readGDX(gdx, "ov_manure", select = list(type = "level"))[, , "grazing"][, , "nr"], dim = c(3.2, 3.3))
@@ -133,8 +180,11 @@ NitrogenBudgetPasture <- function(gdx, include_emissions = FALSE, level = "reg")
 
     out_surplus <- out[, , "surplus"]
     ov50_nr_surplus_pasture <- readGDX(gdx, "ov50_nr_surplus_pasture", format = "first_found", select = list(type = "level"))
+    # GAMS counts all grass produced as withdrawn; compare like with like by removing the unfed grass N again
+    gamsComparable <- out_surplus
+    if (!is.null(unfed)) gamsComparable <- out_surplus - setNames(unfed, getNames(out_surplus))
 
-    if (sum(abs(out_surplus - ov50_nr_surplus_pasture)) > 0.1) {
+    if (sum(abs(gamsComparable - ov50_nr_surplus_pasture)) > 0.1) {
       warning("Surplus in gams and postprocessing dont match")
     }
     if (include_emissions) {

@@ -4,7 +4,13 @@
 \alias{primaryPerSecondary}
 \title{primaryPerSecondary}
 \usage{
-primaryPerSecondary(gdx, file = NULL, level = "reg", allocation = "mass")
+primaryPerSecondary(
+  gdx,
+  file = NULL,
+  level = "reg",
+  allocation = "mass",
+  composition = "shares"
+)
 }
 \arguments{
 \item{gdx}{GDX file}
@@ -20,6 +26,16 @@ Options:
 "value": Allocation based on economic value of outputs
 "none": No allocation - full primary input attributed to each output
           (sum of allocations > 100 percent when co-products exist)}
+
+\item{composition}{Where the primary composition of a region's secondary production comes from.
+"shares" (default): from the input data (f20_processing_shares and conversion
+          factors), i.e. per tonne of secondary made from the primaries in their
+          historical shares.
+"levels": from the model solution (ov20_dem_processing, ov20_secondary_substitutes,
+          ov_prod_reg), i.e. per tonne of the secondary the region actually produced.
+          With "mass" or "value" allocation, sum over secondaries of factor times
+          (production - processing use) then equals the processing use of each primary
+          (vm_dem_processing), less free disposal. See details.}
 }
 \value{
 MAgPIE object containing the amount of primary product needed per unit of secondary product (tDM/tDM)
@@ -29,6 +45,56 @@ Calculates the amount of primary products needed per unit of secondary
              (and tertiary) product, accounting for processing chains and co-product allocation.
              This function traces back from secondary/tertiary products through processing
              stages to the original primary crop inputs.
+}
+\details{
+With \code{composition = "levels"} the primary content of a region's production of secondary j is
+         the processing input that actually made j, divided over the whole production of j:
+         \itemize{
+           \item each process p in no_milling_ginning20 other than substitutes contributes
+                 ov20_dem_processing(p, k) times the allocation weight of j in (p, k); several processes making
+                 j from k are each counted with their own input (e.g. maize to distillers grain by distilling and
+                 by fermentation);
+           \item tonnes relabelled by v20_secondary_substitutes carry the content of the substitute input that
+                 covers them, pool by pool as in the q20_processing_substitution_* equations (oils by oils,
+                 molasses by sugar, oilcakes and distillers grain by oilcake_substitutes20, split between the
+                 two in nitrogen of the nominal origin, brans by kcereals20). The whole substitute input of a
+                 pool is allocated, including any input above the pool's need;
+           \item secondary inputs (e.g. sugar to alcohol, oils used as substitutes) carry the region's own
+                 content of that secondary (a linear system, solved per region and year);
+           \item the divisor is the whole production ov_prod_reg(j), so tonnes from the processing balance
+                 flow dilute the content and the content of overproduced (wasted) tonnes stays with the
+                 produced ones;
+           \item milling and ginning pass no primary content to their outputs (brans, fibres, maize and rice oils
+                 and cakes from milling): their input is food use (milling) or the whole production (ginning) of
+                 the crop, which is not processing use (vm_dem_processing) and stays with the crop's own uses.
+                 Brans still carry cereal content through the brans substitution pool; fibres carry none;
+           \item a region that does not produce j gets the factor of the world as a single region.
+         }
+         Input to a process without outputs (free disposal), substitute input of a pool without relabelled
+         tonnes, and substitute input of a product outside the four pools are not attributed to any secondary.
+         The last counts in vm_dem_processing but no q20_processing_substitution_* equation turns it into a
+         secondary, so the identity above misses it, without a warning.
+
+         Guards, each with a warning that names region and year:
+         \itemize{
+           \item processing or substitute input into a secondary the region does not produce
+                 (ov_prod_reg <= 0) is not attributed (the identity above then misses that content);
+           \item substitute input to a pool without relabelled tonnes is not attributed (likewise);
+           \item where a secondary is almost entirely made from itself (in module 20 only oils, used as
+                 substitutes for oils: production minus that input below 1 percent of production), its content
+                 per tonne would be the content of the real output amplified more than 100 times; the region
+                 then gets the World factor for that secondary (the identity then no longer holds for that
+                 region and year). Where the World itself is in that state, the content is not attributed and
+                 the factor is 0;
+           \item NA levels are read as 0.
+         }
+         The solve stops if a factor comes out below -1e-9 or not finite, which the pool structure rules out;
+         rounding can leave factors of the order of -1e-15. Where no input goes into a secondary without
+         production and none is almost entirely made from itself, it also checks the balance of the solve, per region
+         and year (content of production net of the secondaries' own processing use = the primary input attributed
+         to them), and stops if it fails.
+         The pool structure is that of module 20 realization substitution_may21; for a gdx without its symbols
+         (ov20_secondary_substitutes, oilcake_substitutes20, kcereals20, no_milling_ginning20) the function stops.
 }
 \examples{
 \dontrun{

@@ -35,7 +35,7 @@
 #'   processed and then fed to livestock (e.g. soybean -> oilcake -> feed) is moved
 #'   from the secd pathway to the feed pathway. The processed-then-fed share is
 #'   sSecd * phi, where phi[primary] is the feed fraction of the secondary products
-#'   derived from that primary (mass allocation via \code{primaryPerSecondary}).
+#'   derived from that primary (value allocation via \code{primaryPerSecondary}).
 #'   Default TRUE (processed soybean etc. is moved to feed, keyed on its immediate
 #'   demand category).
 #' @param reassignLivestock logical; if TRUE (default) every livestock (\code{kli})
@@ -47,6 +47,10 @@
 #'   processed-then-fed share); a no-op for resources without \code{kli} products
 #'   (e.g. land). Per-product totals are conserved either way.
 #'
+#' @param composition Passed to \code{\link{tradedPrimaries}} and
+#'   \code{\link{primaryPerSecondary}}: "shares" (default) or "levels" (primary
+#'   content of secondary products from the model's actual processing flows).
+#'
 #' @return MAgPIE object. When \code{bilateral = FALSE}: (region, year,
 #'   accounting.pathway.product) with accounting in \{production, consumption,
 #'   export, import, net-trade\} and pathway in \{prim, secd, feed\}. When
@@ -57,7 +61,7 @@
 
 embodiedResourceKastner <- function(gdx, resource, file = NULL, level = "reg",
                                     type = "all", bilateral = FALSE, secdToFeed = TRUE,
-                                    reassignLivestock = TRUE) {
+                                    reassignLivestock = TRUE, composition = "shares") {
 
   if (level != "reg") stop("embodiedResourceKastner currently supports level = 'reg' only.")
 
@@ -83,7 +87,7 @@ embodiedResourceKastner <- function(gdx, resource, file = NULL, level = "reg",
   consMats <- list()
   if (length(cropProds) > 0) {
     gross  <- tradedPrimaries(gdx, bilateral = TRUE, convFactor = "exporter",
-                              kastner = FALSE, level = level)
+                              kastner = FALSE, level = level, composition = composition)
     grossC <- dimSums(gross, dim = 3.1)                       # ex.im x year x product (primary eq.)
     cp <- intersect(cropProds, getItems(grossC, dim = 3))
     if (length(cp) > 0)
@@ -136,10 +140,11 @@ embodiedResourceKastner <- function(gdx, resource, file = NULL, level = "reg",
   # Optional: re-attribute the processed-then-fed share (e.g. soybean -> oilcake ->
   # livestock feed) from the secd pathway to the feed pathway. phi[primary] is the
   # feed fraction of the secondary products derived from that primary, in primary
-  # equivalents (mass allocation via primaryPerSecondary). The moved share is
+  # equivalents (value allocation via primaryPerSecondary). The moved share is
   # sSecd * phi, so prim is unchanged and prim + secd + feed still sums to 1.
   if (secdToFeed) {
-    pps     <- primaryPerSecondary(gdx, level = level, allocation = "value")[, cyears, ]
+    pps     <- primaryPerSecondary(gdx, level = level, allocation = "value",
+                                   composition = composition)[, cyears, ]
     secProd <- getItems(pps, dim = 3.1)                                       # secondary (ksd)
     demSec  <- dem[, , secProd]
     feedPE  <- dimSums(collapseNames(demSec[, , "feed"]) * pps, dim = 3.1)    # prim-eq fed via processing

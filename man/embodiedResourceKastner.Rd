@@ -12,7 +12,8 @@ embodiedResourceKastner(
   type = "all",
   bilateral = FALSE,
   secdToFeed = TRUE,
-  reassignLivestock = TRUE
+  reassignLivestock = TRUE,
+  composition = "shares"
 )
 }
 \arguments{
@@ -38,7 +39,7 @@ exporter = production origin and importer = consumer. Default FALSE.}
 processed and then fed to livestock (e.g. soybean -> oilcake -> feed) is moved
 from the secd pathway to the feed pathway. The processed-then-fed share is
 sSecd * phi, where phi[primary] is the feed fraction of the secondary products
-derived from that primary (mass allocation via \code{primaryPerSecondary}).
+derived from that primary (value allocation via \code{primaryPerSecondary}).
 Default TRUE (processed soybean etc. is moved to feed, keyed on its immediate
 demand category).}
 
@@ -50,6 +51,10 @@ products' own enteric/manure/labour/water footprint) rather than only the
 feed crops. Orthogonal to \code{secdToFeed} (which re-routes a crop's
 processed-then-fed share); a no-op for resources without \code{kli} products
 (e.g. land). Per-product totals are conserved either way.}
+
+\item{composition}{Passed to \code{\link{tradedPrimaries}} and
+\code{\link{primaryPerSecondary}}: "shares" (default) or "levels" (primary
+content of secondary products from the model's actual processing flows).}
 }
 \value{
 MAgPIE object. When \code{bilateral = FALSE}: (region, year,
